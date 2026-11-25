@@ -1,0 +1,41 @@
+# Local-only source references (redistribution not authorised)
+references/
+
+# Environments and tooling caches
+.venv/
+.conda/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Credentials
+.env
+.env.*
+!.env.example
+.cdsapirc
+*.key
+
+# Acquisition caches, large rasters and generated datasets
+data/cache/
+data/raw/
+data/interim/
+data/processed/
+data/outputs/
+*.nc
+*.nc4
+*.grib
+*.zip
+*.parquet
+*.gpkg
+*.npy
+*_extracted/
+era5_monthly_cache/
+fingrid_cache/
+atlite_outputs/
+ml_pipeline_data/

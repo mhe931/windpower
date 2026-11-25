@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Finland wind simulator</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/js/main.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <div id="data-banner" class="banner" role="region" aria-label="Data status">
+    <strong id="banner-text">Checking data status…</strong>
+  </div>
+
+  <header class="site-header">
+    <h1>Finland wind simulator</h1>
+    <p class="lede">Hourly wind power from ERA5 reanalysis wind, for one grid cell or for the whole country. Runs locally; nothing is sent to other sites.</p>
+    <nav aria-label="Views">
+      <ul class="tabs">
+        <li><a href="#simulate" id="nav-simulate">Site simulation</a></li>
+        <li><a href="#overview" id="nav-overview">Finland overview</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <noscript><p class="notice">This page needs JavaScript for the map and charts. The data is also available as CSV from the API: <code>/api/v1/simulate.csv</code> and <code>/api/v1/national.csv</code>.</p></noscript>
+
+    <!-- ===================== View 1: site simulation ===================== -->
+    <section id="view-simulate" class="view" aria-labelledby="h-sim">
+      <h2 id="h-sim">Site simulation</h2>
+
+      <div class="layout">
+        <section class="panel" aria-labelledby="h-loc">
+          <h3 id="h-loc">1. Location</h3>
+          <p id="map-help" class="hint">Click the map, or focus it and use the arrow keys to move one grid cell. The latitude and longitude fields below do the same thing.</p>
+          <div id="map" class="map" tabindex="0" role="group" aria-roledescription="map" aria-label="Map of Finland with the ERA5 grid" aria-describedby="map-help map-status"></div>
+          <p id="map-status" class="hint map-status"></p>
+          <button type="button" class="link-button" id="map-help-open">Map keyboard help</button>
+          <dialog id="map-dialog" aria-labelledby="map-dialog-title">
+            <h4 id="map-dialog-title">Map keyboard help</h4>
+            <ul>
+              <li>Tab to the map, then press the arrow keys to move the selected cell by one cell.</li>
+              <li>Press Enter to run the simulation for the selected cell.</li>
+              <li>You can always type the latitude and longitude instead.</li>
+            </ul>
+            <form method="dialog"><button class="button">Close</button></form>
+          </dialog>
+        </section>
+
+        <section class="panel" aria-labelledby="h-set">
+          <h3 id="h-set">2. Settings</h3>
+          <form id="sim-form" novalidate>
+            <div class="grid-2">
+              <div class="field">
+                <label for="lat">Latitude (°N)</label>
+                <input id="lat" name="lat" type="number" inputmode="decimal" step="any" required aria-invalid="false" data-error="err-lat">
+                <p id="err-lat" class="field-error" hidden></p>
+              </div>
+              <div class="field">
+                <label for="lon">Longitude (°E)</label>
+                <input id="lon" name="lon" type="number" inputmode="decimal" step="any" required aria-invalid="false" data-error="err-lon">
+                <p id="err-lon" class="field-error" hidden></p>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="start">First day (UTC)</label>
+                <input id="start" name="start" type="date" required aria-invalid="false" data-error="err-start">
+                <p id="err-start" class="field-error" hidden></p>
+              </div>
+              <div class="field">
+                <label for="end">Last day (UTC, inclusive)</label>
+                <input id="end" name="end" type="date" required aria-invalid="false" data-error="err-end">
+                <p id="err-end" class="field-error" hidden></p>
+              </div>
+            </div>
+            <p id="range-hint" class="hint"></p>
+            <div class="field">
+              <label for="archetype">Turbine archetype</label>
+              <select id="archetype" name="archetype" aria-describedby="arch-desc"></select>
+              <p id="arch-desc" class="hint"></p>
+              <p id="err-archetype" class="field-error" hidden></p>
+            </div>
+            <div class="field">
+              <label for="capacity">Installed capacity (MW)</label>
+              <input id="capacity" name="capacity_mw" type="number" inputmode="decimal" step="any" required aria-invalid="false" aria-describedby="cap-hint" data-error="err-capacity_mw">
+              <p id="cap-hint" class="hint"></p>
+              <p id="err-capacity_mw" class="field-error" hidden></p>
+            </div>
+            <div id="sim-errors" class="error-box" tabindex="-1" hidden>
+              <h4>The simulation could not run</h4>
+              <p id="sim-error-text"></p>
+            </div>
+            <div class="actions">
+              <button type="submit" class="button primary">Run simulation</button>
+            </div>
+          </form>
+        </section>
+      </div>
+
+      <section class="panel results" aria-labelledby="h-res" id="sim-results" hidden>
+        <h3 id="h-res">3. Result</h3>
+        <p id="sim-status" class="sr-announce" role="status" aria-live="polite"></p>
+        <p id="sim-cell" class="hint"></p>
+        <dl class="stats" id="sim-stats"></dl>
+        <figure class="chart-figure">
+          <figcaption id="sim-caption"></figcaption>
+          <div class="legend" id="sim-legend"></div>
+          <svg id="sim-chart" class="chart" role="img" aria-labelledby="sim-caption"></svg>
+          <output id="sim-readout" class="readout" for="sim-chart"></output>
+        </figure>
+        <details id="sim-table-details">
+          <summary>Show data table</summary>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Hourly simulation values, scrollable">
+            <table id="sim-table"><caption>Hourly simulated output (UTC)</caption>
+              <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Power (MW)</th><th scope="col">Capacity factor</th><th scope="col">Energy (MWh)</th></tr></thead>
+              <tbody></tbody></table>
+          </div>
+        </details>
+        <p class="actions"><a id="sim-csv" class="button" href="#" download>Download CSV</a></p>
+        <aside class="caveats" aria-label="How to read this result">
+          <h4>How to read this</h4>
+          <ul>
+            <li><strong>No calibration.</strong> No national calibration and no curtailment correction is applied to this simulation.</li>
+            <li><strong>Coarse grid.</strong> The data has 0.25° resolution: a cell is about 28 km north–south by <span id="cell-ew">14</span> km east–west. The result is the cell-average ERA5 wind converted with the chosen turbine archetype, not a micro-sited estimate for one turbine position.</li>
+            <li><strong>Hub height.</strong> The 100 m wind is extrapolated to the archetype's mean hub height with a logarithmic profile and the cell's mean surface roughness, then converted with the archetype power curve (61 points, 0–30 m/s) and scaled by the installed capacity.</li>
+            <li><strong>Times</strong> are UTC, hour start. Energy per hour in MWh equals the power in MW × 1 h.</li>
+          </ul>
+        </aside>
+      </section>
+    </section>
+
+    <!-- ===================== View 2: national overview ===================== -->
+    <section id="view-overview" class="view" aria-labelledby="h-ov" hidden>
+      <h2 id="h-ov">Finland overview</h2>
+      <p>National wind power: simulated (theoretical) output of the whole turbine fleet against the output reported by Fingrid.</p>
+
+      <form id="ov-form" class="panel" novalidate aria-label="Date range">
+        <div class="grid-3">
+          <div class="field">
+            <label for="ov-start">First day (UTC)</label>
+            <input id="ov-start" type="date" required>
+          </div>
+          <div class="field">
+            <label for="ov-end">Last day (UTC, inclusive)</label>
+            <input id="ov-end" type="date" required>
+          </div>
+          <div class="actions inline">
+            <button type="submit" class="button primary">Update chart</button>
+            <button type="button" class="button" id="ov-all">Show all</button>
+            <button type="button" class="button" id="ov-week">Last 7 days</button>
+          </div>
+        </div>
+        <p class="hint">You can also drag across the chart to zoom to that period.</p>
+        <div id="ov-errors" class="error-box" tabindex="-1" hidden>
+          <h4>The overview could not be updated</h4>
+          <p id="ov-error-text"></p>
+        </div>
+      </form>
+
+      <section class="panel" aria-labelledby="h-ovchart">
+        <h3 id="h-ovchart">Hourly national output</h3>
+        <p id="ov-status" class="sr-announce" role="status" aria-live="polite"></p>
+        <figure class="chart-figure">
+          <figcaption id="ov-caption"></figcaption>
+          <div class="legend" id="ov-legend"></div>
+          <svg id="ov-chart" class="chart" role="img" aria-labelledby="ov-caption"></svg>
+          <output id="ov-readout" class="readout" for="ov-chart"></output>
+        </figure>
+        <p class="notice">The theoretical series is <strong>uncalibrated</strong> (no bias or curtailment correction). The observed series is what Fingrid reported and <strong>may be curtailed</strong>, so the two are expected to differ.</p>
+        <details id="ov-table-details">
+          <summary>Show data table</summary>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Hourly national values, scrollable">
+            <table id="ov-table"><caption>Hourly national output (UTC)</caption>
+              <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Theoretical (MW)</th><th scope="col">Observed, Fingrid (MW)</th></tr></thead>
+              <tbody></tbody></table>
+          </div>
+        </details>
+        <p class="actions"><a id="ov-csv" class="button" href="#" download>Download CSV of this period</a></p>
+      </section>
+
+      <section class="panel" aria-labelledby="h-cov">
+        <h3 id="h-cov">Data coverage</h3>
+        <dl class="stats" id="ov-stats"></dl>
+        <h4>Missing observed hours</h4>
+        <p id="ov-missing-summary"></p>
+        <ul id="ov-missing-list" class="plain-list"></ul>
+      </section>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p id="footer-label"></p>
+    <p id="footer-attribution"></p>
+    <p>Model <span id="footer-model"></span> · run mode <span id="footer-mode"></span> · installed fleet capacity <span id="footer-capacity"></span></p>
+  </footer>
+</body>
+</html>
