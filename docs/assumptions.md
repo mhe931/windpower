@@ -112,6 +112,18 @@ Cell references are to `finland_wind_data_pipeline` (notebook 1).
 | P10 | Site artifact `site/v1` | `wind_effective.bin` is little-endian float16 `[time, lat, lon]` (about 10.3 MB for 2,208 h on 45 × 52); roughness is the time-mean per cell (hourly roughness is not exported); `grid.json` marks every ERA5 cell as supported (no land/sea or border mask exists in the repository) and adds the fleet capacity matrix; `national_hourly.json` also carries the `inference_only` series. Export fails above 15 MB. No national calibration is applied to the site simulation. | Spec; size budget. |
 | P11 | Scripts | `run_smoke.ps1` picks the active venv/conda Python, else `.venv`, else PATH. `run_full.ps1` accepts `-CheckOnly`/`-DryRun`, `-UseActivePython`, `-SkipEnv`, `-Refresh`, `-EnvFile`; it prints credential *presence* only and exits 2 when anything is unavailable. Conda is not installed here, so the conda branch (env create/update, `conda run`) is untested. | Handoff. |
 
+## Local website (handoff 3)
+
+| # | Item | Choice | Why |
+|---|------|--------|-----|
+| W1 | Finland outline | Mainland: the 37-vertex polygon in the notebook map cell (coarse). Aland: a hand-built 6-vertex polygon (not from the notebook). Used for map drawing and for rejecting locations > 0.25 deg outside it. | No better boundary data available offline; documented limitation (offshore sites rejected). |
+| W2 | Hub-height roughness | Time-mean roughness per cell (artifact has no hourly roughness). | Artifact size budget. |
+| W3 | Rounding | MW and MWh to 1 W / 1 Wh, capacity factor to 6 decimals, hub height/specific power shown to 0.1; computations use the unrounded archetype values. | Keeps small capacities meaningful and CSV == JSON. |
+| W4 | Dates | `end` given as a date means through 23:00; a date-only bound on the first/last day of the artifact is clamped to its first/last hour; non-whole-hour or non-UTC offsets are rejected. | Simple, explicit hourly semantics. |
+| W5 | Capacity bounds | 0.01 - 1000 MW, default 3 MW (a typical modern turbine). | Our choice; stated in /meta. |
+| W6 | Status codes | 400 malformed/missing, 422 well-formed but unsupported (outside grid/Finland, dates, capacity, archetype). | Clear client handling. |
+| W7 | Test network guard | The autouse guard now allows loopback connections (in-process test servers) and still blocks everything else. | Needed for HTTP tests. |
+
 ## Fixtures and tests
 
 * All fixtures are labelled `SYNTHETIC` (dataset attrs, JSON members, feature names) and are generated

@@ -18,7 +18,9 @@ from .pipeline import STAGES, Run, Unavailable
 from .validate import CheckResult, failed_checks
 
 EXIT_OK, EXIT_VALIDATION, EXIT_UNAVAILABLE, EXIT_ERROR, EXIT_USAGE = 0, 1, 2, 3, 64
-STAGE_CHOICES = (*STAGES, "smoke", "demo", "all")
+STAGE_CHOICES = (*STAGES, "smoke", "demo", "all", "serve")
+GENERATE_COMMAND = {"full": "python -m windpower all --mode full   (needs ERA5 + Fingrid credentials; see docs/reproduce.md)",
+                    "demo": "python -m windpower demo", "smoke": "python -m windpower smoke"}
 
 
 class _Parser(argparse.ArgumentParser):
@@ -30,7 +32,12 @@ class _Parser(argparse.ArgumentParser):
 def build_parser() -> argparse.ArgumentParser:
     p = _Parser(prog="python -m windpower", description="Finland wind-power baseline pipeline.")
     p.add_argument("stage", choices=STAGE_CHOICES, help="stage to run; 'smoke' and 'demo' are fully offline synthetic end-to-end runs")
-    p.add_argument("--mode", choices=C.RUN_MODES, default="full", help="run mode for stages and 'all' (default: full; smoke/demo stages fix their own)")
+    p.add_argument("--mode", choices=C.RUN_MODES, default=None,
+                   help="run mode for stages and 'all' (default: full; smoke/demo stages fix their own); for 'serve' the default is the first "
+                        "existing site artifact of full, demo, smoke")
+    p.add_argument("--site-dir", default=None, help="serve: directory of the site artifact (…/site/v1); overrides --mode/--data-dir")
+    p.add_argument("--host", default="127.0.0.1", help="serve: bind address (default 127.0.0.1, local only)")
+    p.add_argument("--port", type=int, default=8000, help="serve: TCP port (default 8000)")
     p.add_argument("--data-dir", default=None, help="root for cache/interim/outputs (default: <repo>/data or $WINDPOWER_DATA_DIR)")
     p.add_argument("--offline", action="store_true", help="never use the network (always on for smoke/demo)")
     p.add_argument("--refresh", action="store_true", help="re-download raw inputs (needs network and credentials where applicable)")
@@ -61,10 +68,49 @@ def summarise(results: Sequence[CheckResult], label: str, synthetic: bool) -> in
     return EXIT_VALIDATION if failed else EXIT_OK
 
 
+def serve(args: argparse.Namespace) -> int:
+    """Serve the website from an existing site artifact; never generates or synthesises data."""
+    from pathlib import Path
+
+    from .web import server
+    from .web.data import SiteDataError
+
+    if not (0 <= args.port <= 65535):
+        print("--port must be between 0 and 65535", file=sys.stderr)
+        return EXIT_USAGE
+    if args.site_dir:
+        candidates = [("custom", Path(args.site_dir))]
+    else:
+        modes = [args.mode] if args.mode else ["full", "demo", "smoke"]
+        candidates = [(m, C.output_dir(m, args.data_dir) / "site" / "v1") for m in modes]
+    found = next(((m, d) for m, d in candidates if (d / "manifest.json").is_file()), None)
+    if found is None:
+        print("SITE ARTIFACT NOT FOUND - nothing is served and no data is synthesised. Looked in:", file=sys.stderr)
+        for _, d in candidates:
+            print(f"  {d}", file=sys.stderr)
+        print("Generate it with:", file=sys.stderr)
+        for m, _ in candidates:
+            if m in GENERATE_COMMAND:
+                print(f"  {GENERATE_COMMAND[m]}", file=sys.stderr)
+        if not args.mode and not args.site_dir:
+            print("(for a quick local look use the demo command; it creates clearly labelled SYNTHETIC data)", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    try:
+        return server.run(found[1], args.host, args.port)
+    except SiteDataError as exc:
+        print(f"SITE ARTIFACT INVALID: {exc}\nRegenerate it with: {GENERATE_COMMAND.get(found[0], 'python -m windpower demo')}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    except OSError as exc:
+        print(f"cannot listen on {args.host}:{args.port}: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+
 def main(argv: "Sequence[str] | None" = None) -> int:
     args = build_parser().parse_args(argv)
     stage = args.stage
-    mode = {"smoke": "smoke", "demo": "demo"}.get(stage, args.mode)
+    if stage == "serve":
+        return serve(args)
+    mode = {"smoke": "smoke", "demo": "demo"}.get(stage, args.mode or "full")
     say: Callable[[str], None] = (lambda m: None) if args.quiet else print
     run = Run(mode, args.data_dir, offline=args.offline, refresh=args.refresh, start=args.start, end=args.end, say=say)
     try:

@@ -18,6 +18,7 @@ target*: it is compared with what this code produces and reported, never forced.
 | Real fleet snapshot (OSM Overpass + ArcGIS FeatureServer) | **Not fetched** - code and caching are tested against fakes only; public, needs network only (`ingest-fleet --refresh`) |
 | Reconciliation with the documented values (2,208 h, 2,228 turbines, 9,790.18 MW, Pearson r 0.9296, test RMSE 323.2 MW ...) | **Not run** - status `not_reproducible_no_real_data` in synthetic runs; see `docs/reconciliation.md` |
 | `scripts/run_full.ps1` (Conda) | Parse-checked and its credential/check path (`-CheckOnly`) tested; **not executed end to end** - conda is not installed on the development machine, and `environment.yml` is untested |
+| Local website (`serve`) | API, CSV, static hygiene **verified** by pytest; JavaScript only checked by hand in headless Edge (no Node); only ever shown with SYNTHETIC data - real-data integration untested (`docs/site.md`) |
 | Licences | ERA5 / OSM / Fingrid statements are **assumed**, to be verified (`docs/data-sources.md`); atlite MIT is read from package metadata |
 
 Synthetic outputs say nothing about Finland: they exist to exercise code paths and are labelled `SYNTHETIC`
@@ -59,6 +60,20 @@ python -m pytest -q
 `pip install -e .` builds in an isolated environment and therefore needs `setuptools` from the package index
 (add `--no-build-isolation` if it is already installed). Full real-data run: see `docs/reproduce.md`.
 
+## Local website (Milestone 2)
+
+```powershell
+python -m windpower demo                            # SYNTHETIC demo artifact -> data\outputs\demo\site\v1
+python -m windpower serve --mode demo --port 8765   # prints http://127.0.0.1:8765/ ; Ctrl+C to stop
+powershell -File scripts\run_site.ps1 -Mode demo -Port 8765
+```
+
+Site simulation (location on a map or lat/lon, date range, archetype, capacity → hourly MW, capacity factor, MWh, CSV)
+and Finland overview (national theoretical vs observed series, coverage). Stdlib server + vanilla JS, no network at
+runtime; demo/synthetic data is flagged by a persistent banner, in every API response and in every CSV header. No
+national calibration is applied to site simulations. If the artifact is missing, `serve` prints the command that
+creates it. Details, API, accessibility notes and gaps: `docs/site.md`.
+
 ## Stages
 
 `python -m windpower <stage> [--mode smoke|full|demo] [--data-dir DIR] [--offline] [--refresh] [--start ..] [--end ..]`
@@ -76,6 +91,7 @@ python -m pytest -q
 | `smoke` | all of the above offline on the small synthetic fixture | |
 | `demo` | same on the synthetic Finland grid, labelled DEMO | |
 | `all` | all of the above for `--mode` (full needs credentials) | |
+| `serve` | local website (map, hourly simulation, national overview) from `site/v1`; never generates data | see `docs/site.md` |
 
 Stages rebuild what they need from the raw caches, so they can be run separately; in synthetic modes missing
 fixtures are generated, in `full` mode missing inputs are an error - **never a silent fallback to synthetic data**.
@@ -86,10 +102,10 @@ fixtures are generated, in `full` mode missing inputs are an error - **never a s
 ## Layout
 
 ```
-src/windpower/   config io_utils fixtures era5 fleet fingrid simulate calibrate validate manifest export_site pipeline cli
+src/windpower/   config io_utils fixtures era5 fleet fingrid simulate calibrate validate manifest export_site pipeline cli web/ (server, data, static/)
 tests/           offline pytest suite (sockets blocked, credentials stripped)
-scripts/         run_smoke.ps1  run_full.ps1
-docs/            assumptions  data-sources  licenses  reconciliation  reproduce
+scripts/         run_smoke.ps1  run_full.ps1  run_site.ps1
+docs/            assumptions  data-sources  licenses  reconciliation  reproduce  site
 data/            (git-ignored) cache/ interim/ outputs/<mode>/
 references/      (git-ignored, local-only originals and text exports - never commit)
 ```

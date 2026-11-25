@@ -20,11 +20,24 @@ def _offline_and_credential_free(monkeypatch):
     """Tests must never reach the network or depend on a developer's credentials."""
     import socket
 
-    def blocked(*args, **kwargs):
+    real_connect, real_create = socket.socket.connect, socket.create_connection
+
+    def is_loopback(address) -> bool:
+        host = address[0] if isinstance(address, tuple) else address
+        return host in ("127.0.0.1", "::1", "localhost")
+
+    def guarded_connect(self, address, *args, **kwargs):
+        if is_loopback(address):   # in-process test servers only; everything else stays blocked
+            return real_connect(self, address, *args, **kwargs)
         raise RuntimeError("network access is disabled in the test suite")
 
-    monkeypatch.setattr(socket.socket, "connect", blocked)
-    monkeypatch.setattr(socket, "create_connection", blocked)
+    def guarded_create(address, *args, **kwargs):
+        if is_loopback(address):
+            return real_create(address, *args, **kwargs)
+        raise RuntimeError("network access is disabled in the test suite")
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket, "create_connection", guarded_create)
     for name in ("FINGRID_API_KEY", "CDSAPI_URL", "CDSAPI_KEY", "CDSAPI_RC"):
         monkeypatch.delenv(name, raising=False)
 
