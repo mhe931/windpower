@@ -1,0 +1,72 @@
+# Pinned from the development venv (Python 3.13, Windows). Install with:
+#   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+#   .\.venv\Scripts\python.exe -m pip install -e . --no-deps
+# Section 1 = libraries the package imports directly; section 2 = their pinned
+# dependency closure (resolved from installed metadata; unused extras omitted).
+
+# --- direct ---
+numpy==2.5.5
+pandas==3.1.1
+xarray==2026.9.0
+netCDF4==1.7.5.1.post1
+h5netcdf==1.8.3
+scipy==1.18.1
+scikit-learn==1.9.1
+geopandas==1.2.0
+pyogrio==0.13.0
+shapely==2.2.0
+pyproj==3.8.0
+pyarrow==26.0.1
+requests==2.34.2
+atlite==0.7.0
+cdsapi==0.7.7
+pytest==9.2.0
+
+# --- pinned transitive ---
+affine==3.0.1
+attrs==26.1.0
+Bottleneck==1.6.1
+certifi==2026.11.20
+cffi==2.1.1
+cfgrib==0.9.15.1
+cftime==1.6.6.1
+charset-normalizer==3.5.3
+click==8.5.1
+cloudpickle==3.1.3
+colorama==0.4.6
+dask==2026.11.0
+donfig==0.8.1.post1
+eccodes==2.50.1
+ecmwf-datastores-client==0.6.0
+findlibs==0.1.5
+fsspec==2026.9.0
+google-crc32c==1.9.0
+idna==3.20
+iniconfig==2.3.1
+joblib==1.6.0
+locket==1.0.0
+msgspec==0.22.0
+multiurl==0.3.10
+narwhals==2.29.0
+numcodecs==0.17.1
+numexpr==2.14.2
+obstore==0.12.1
+packaging==26.4
+partd==1.4.2
+pluggy==1.7.0
+progressbar2==4.7.1
+pycparser==3.12
+Pygments==2.21.0
+pyparsing==3.3.3
+python-dateutil==4.0.0
+python-utils==4.2.2
+pytz==2026.6
+PyYAML==6.0.4
+rasterio==1.5.2
+threadpoolctl==3.8.0
+toolz==1.2.0
+tqdm==4.70.1
+typing_extensions==4.16.0
+tzdata==2026.6
+urllib3==2.8.0
+zarr==3.4.2

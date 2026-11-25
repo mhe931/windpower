@@ -1,0 +1,24 @@
+name: windpower
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - xarray
+  - netcdf4
+  - h5netcdf
+  - scipy
+  - scikit-learn
+  - geopandas
+  - pyogrio
+  - shapely
+  - pyproj
+  - pyarrow
+  - requests
+  - atlite
+  - cdsapi
+  - pytest
+  - pip
+  - pip:
+      - -e .
