@@ -24,7 +24,7 @@ def site(smoke_run):
 
 def test_site_files_and_size(site):
     d, _ = site
-    assert sorted(p.name for p in d.iterdir()) == sorted([*JSON_FILES, "wind_effective.bin", "roughness_mean.bin"])
+    assert sorted(p.name for p in d.iterdir()) == sorted([*JSON_FILES, "dataset.json", "wind_effective.bin", "roughness_mean.bin"])
     assert sum(p.stat().st_size for p in d.iterdir()) < 15_000_000
 
 

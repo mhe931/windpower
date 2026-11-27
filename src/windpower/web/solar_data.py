@@ -384,6 +384,7 @@ def _flag_lines(res: Mapping[str, Any]) -> "list[str]":
         out.append(f"*** {res['notice']} ***")
     out += [f"label: {res['label']}", f"model_version: {res['model_version']}", f"run_mode: {res['run_mode']}",
             f"synthetic: {str(res['synthetic']).lower()}", f"demo: {str(res['demo']).lower()}", f"partial_run: {str(res['partial']).lower()}"]
+    out.extend(f"{k}: {res.get(k) or 'not recorded'}" for k in ("dataset_id", "version_id", "href", "provenance_status"))
     return out
 
 

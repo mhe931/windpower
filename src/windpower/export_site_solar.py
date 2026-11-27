@@ -26,10 +26,12 @@ import numpy as np
 import pandas as pd
 
 from . import config as C
+from . import dataset_record as catalog
+from . import sarah
+from .fingrid_solar import key_missing_message
 from .export_site import MAX_BYTES, SITE_DIR as WIND_SITE_DIR, ExportSizeError
-from .io_utils import atomic_write_bytes, atomic_write_json, iso_utc, redact_paths
-from .manifest import describe_outputs
-from .sarah_regrid import SOURCE_CODES, SarahOnGrid
+from .io_utils import atomic_write_bytes, atomic_write_json, iso_utc
+from .sarah_regrid import SOURCE_CODES, SRC_SATELLITE, SarahOnGrid
 from .solar_pv import CfCubes, panel_record
 from .solar_validate import MODEL_VERSION, SOLAR_UNITS, solar_licences
 
@@ -71,12 +73,25 @@ def _series_reason(col: str, need: str, unavailable: Mapping[str, str]) -> str:
     return "not computed"
 
 
+def _public_gaps(gaps):
+    # Local exceptions can contain paths, query strings and arbitrary upstream
+    # text. Publish actionable stable reasons rather than interpolating them.
+    messages = {"era5": "no ERA5 solar files available (default cache: solar/era5); supply --era5-solar-path or run ingest-era5-solar.",
+                "sarah": "SARAH-3 daily inputs unavailable for this window.",
+                "hybrid": "SARAH-3 inputs unavailable for hybrid simulation.",
+                "public": "Public allocation inputs unavailable; run ingest-solar-public.",
+                "national": "National series unavailable for the selected inputs."}
+    return {key: messages.get(key) or (key_missing_message() if "FINGRID_API_KEY" in reason else
+                                       "Fingrid series unavailable for this window.")
+            for key, reason in gaps.items() if key in messages or key in ("fingrid_267", "fingrid_248", "fingrid_362")}
+
+
 def export_site_solar(out_root: "str | Path", *, mode: str, synthetic: bool, hours: pd.DatetimeIndex, grid: C.GridSpec, ongrid: "SarahOnGrid | None",
                       cubes: "CfCubes | None", allocation: Any, national: "pd.DataFrame | None", info: Mapping[str, Any],
-                      unavailable: Mapping[str, str], coverage_summary: "Mapping[str, Any] | None" = None) -> dict[str, Any]:
+                      unavailable: Mapping[str, str], coverage_summary: "Mapping[str, Any] | None" = None, inputs=None) -> dict[str, Any]:
     """Write site/solar/v1 under `out_root`; returns its manifest. `unavailable` maps keys (era5, hybrid, sarah, public, fingrid_267, ...) to reasons."""
     out = Path(out_root) / SOLAR_SITE_DIR
-    unavailable = {k: redact_paths(str(v)) for k, v in unavailable.items()}      # the artifact is served to browsers: no home-directory paths
+    unavailable = _public_gaps(unavailable)
     if out.resolve() == (Path(out_root) / WIND_SITE_DIR).resolve():
         raise RuntimeError("refusing to write the solar artifact into the wind site directory")
     n_t, n_y, n_x = len(hours), grid.n_lat, grid.n_lon
@@ -89,6 +104,7 @@ def export_site_solar(out_root: "str | Path", *, mode: str, synthetic: bool, hou
     if est > MAX_BYTES:
         raise ExportSizeError(f"solar artifact bins would be {est / 1e6:.1f} MB (> {MAX_BYTES / 1e6:.0f} MB limit)")
     out.mkdir(parents=True, exist_ok=True)
+    (out / catalog.NAME).unlink(missing_ok=True)
     for stale in ("cf_era5.bin", "cf_hybrid.bin", "source_hybrid.bin"):     # a re-export must not leave files of an earlier, fuller run
         (out / stale).unlink(missing_ok=True)
     bins: dict[str, Any] = {}
@@ -155,15 +171,55 @@ def export_site_solar(out_root: "str | Path", *, mode: str, synthetic: bool, hou
                 "grid": {"name": grid.name, "n_lat": n_y, "n_lon": n_x, "res_deg": grid.res, "lat_range": [float(lats[0]), float(lats[-1])],
                          "lon_range": [float(lons[0]), float(lons[-1])]},
                 "modes": modes, "panel": panel_record(), "capacity_factor_encoding": {"dtype": "uint16", "scale": CF_SCALE},
-                "convention": (info.get("era5_solar") or {}).get("convention"),
+                "convention": (info.get("era5_solar") or {}).get("convention") if cubes is not None else None,
                 "allocation": None if allocation is None else allocation.report, "coverage": None if coverage_summary is None else dict(coverage_summary),
                 "national_series": {k: {"available": v["available"], "reason": v["reason"]} for k, v in series.items()},
                 "unavailable": dict(unavailable), "licences": solar_licences(synthetic, info),
                 "notes": ["No national calibration is applied.", "Hours without Fingrid 267 are missing, never filled."]}
+    conv = manifest["convention"] or {}
+    quality = {"unavailable_modes": [m for m in modes if not modes[m]["available"]],
+               "national_series": {k: v["available"] for k, v in series.items()},
+               "fully_covered_cells": int(ongrid.fully_covered.sum()) if ongrid is not None else None,
+               "sarah_record_status": {str(k): v for k, v in sarah.STATUS_NAMES.items()},
+               "sarah_pixel_hour_codes": {str(k): v for k, v in sarah.CAUSE_NAMES.items()},
+               "hybrid_source_codes": {str(k): v for k, v in SOURCE_CODES.items()}}
+    settings = {k: manifest["panel"][k] for k in ("panel", "slope_deg", "azimuth_deg", "inverter_efficiency")}
+    settings.update(era5_convention=conv.get("convention_used"), convention_override=conv.get("override"),
+                    satellite_min_area_fraction=ongrid.threshold if ongrid is not None else C.SATELLITE_MIN_AREA_FRACTION, cf_scale=CF_SCALE)
+    settings["selected_time"] = {
+        "selection": "inclusive UTC hour starts; a date-only end includes the last available hour of that day",
+        "represented_interval": "[h, h+1h)", "coverage_end_exclusive_utc": iso_utc(hours[-1] + pd.Timedelta(hours=1)),
+        "sarah_last_sample": "last selected hour + 1h (possibly next day); required for the mean, not another output hour",
+        "era5_stamp_rule": {"end": "radiation at h+1h; mean of temperatures at h and h+1h",
+                            "start": "radiation and temperature at h"}.get(settings["era5_convention"]),
+    }
+    settings["sarah_hourly"] = {
+        "method": "trapezoid", "sample_offsets_minutes": [int(i * sarah.STEP / pd.Timedelta(minutes=1)) for i in range(len(sarah.TRAPEZOID))],
+        "weights": list(sarah.TRAPEZOID), "required_record_status": sarah.STATUS_OK,
+        "valid_sample_wm2_inclusive": [0, C.SARAH_MAX_WM2], "diffuse_negative_tolerance_wm2": C.SARAH_DIFFUSE_TOL_WM2,
+        "validity": "Hybrid requires all three SIS/SID pairs valid; fill/nonfinite is missing. Clip SIS-SID to zero within negative tolerance; reject below.",
+    }
+    settings["hybrid_irradiance"] = {
+        "satellite_code": SRC_SATELLITE, "selection": "valid overlap area / full cell area >= satellite_min_area_fraction and finite direct and diffuse",
+        "satellite": "area-weighted SID and SIS-SID over valid pixels", "fallback": "ERA5 direct and diffuse for all other cell-hours",
+        "unchanged": "ERA5 TOA, temperature, albedo and solar position",
+        "fallback_reason_priority": ["outside domain", "missing or flagged step", "partial valid area", "dominant cause by area if none valid"],
+    }
+    settings["national_allocation"] = {
+        "capacity_series": "Fingrid 267 hourly MW; missing stays missing",
+        "large_plant_mw": "operational plant capacity assigned by municipality centroid, in-grid plants only",
+        "population_share": "inhabitants assigned by 1 km cell centre / total in-grid inhabitants",
+        "cell_mw": "(capacity - total_large_plant_mw) * population_share + cell_large_plant_mw",
+        "population_only_cell_mw": "capacity * population_share", "national_mw": "sum(cell_mw * cell_capacity_factor)",
+    }
+    files = catalog.write_dataset(out, solar=True, mode=mode, inputs=inputs, files=catalog.SOLAR_BASE | bins.keys(),
+                                  coverage={**manifest["window"], "step": "1h"}, grid=manifest["grid"],
+                                  units=SOLAR_UNITS, settings=settings, quality=quality)
+    manifest.update(files=files, total_bytes=0)
     atomic_write_json(out / "manifest.json", manifest)
-    files = describe_outputs(out, exclude=("manifest.json",))
     total = sum(f["bytes"] for f in files) + (out / "manifest.json").stat().st_size
     if total > MAX_BYTES:
+        (out / catalog.NAME).unlink()
         raise ExportSizeError(f"solar artifact is {total / 1e6:.1f} MB (> {MAX_BYTES / 1e6:.0f} MB limit)")
     manifest |= {"files": files, "total_bytes": total}
     atomic_write_json(out / "manifest.json", manifest)

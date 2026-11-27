@@ -88,7 +88,7 @@ def test_site_artifact_schema_encoding_and_labels(solar_smoke_run):
     o = data / "outputs" / "solar-smoke"
     site = o / SOLAR_SITE_DIR
     assert site == o / "site" / "solar" / "v1"
-    assert sorted(p.name for p in site.iterdir()) == ["cf_era5.bin", "cf_hybrid.bin", "coverage.json", "grid.json", "manifest.json", "meta.json", "national_hourly.json", "source_hybrid.bin"]
+    assert sorted(p.name for p in site.iterdir()) == ["cf_era5.bin", "cf_hybrid.bin", "coverage.json", "dataset.json", "grid.json", "manifest.json", "meta.json", "national_hourly.json", "source_hybrid.bin"]
     man = json.loads((site / "manifest.json").read_text())
     assert man["run_mode"] == "solar-smoke" and man["synthetic"] and man["label"] == "SYNTHETIC - not real data" and man["artifact_schema_version"] == "1.0"
     assert man["modes"]["era5"]["available"] and man["modes"]["hybrid"]["available"] and man["window"]["hours"] == 48
@@ -249,7 +249,12 @@ def test_real_mode_sarah_and_public_only_is_partial_with_unavailable_ERA5_and_Fi
     assert by["energy_fingrid_248_gwh"]["status"] == "unavailable" and "FINGRID_API_KEY" in by["energy_fingrid_248_gwh"]["note"]
     site = json.loads((o / SOLAR_SITE_DIR / "manifest.json").read_text())
     assert not site["modes"]["era5"]["available"] and not site["modes"]["hybrid"]["available"] and "ERA5" in site["modes"]["era5"]["reason"]
-    assert sorted(p.name for p in (o / SOLAR_SITE_DIR).iterdir()) == ["coverage.json", "grid.json", "manifest.json", "meta.json", "national_hourly.json"]   # no .bin
+    from windpower.dataset_record import verify_dataset
+
+    dataset = verify_dataset(o / SOLAR_SITE_DIR)
+    assert dataset["partial"] and not dataset["synthetic"]
+    assert set(dataset["quality"]["input_gaps"]) == {"era5-solar", "fingrid-267", "fingrid-248", "fingrid-362"}
+    assert sorted(p.name for p in (o / SOLAR_SITE_DIR).iterdir()) == ["coverage.json", "dataset.json", "grid.json", "manifest.json", "meta.json", "national_hourly.json"]   # no .bin
     nat = json.loads((o / SOLAR_SITE_DIR / "national_hourly.json").read_text())
     for key, s in nat["series"].items():
         assert s["available"] is False and "values" not in s and s["reason"]

@@ -20,6 +20,7 @@ import pandas as pd
 
 from . import calibrate as K
 from . import config as C
+from . import dataset_record as catalog
 from . import era5, export_site, fingrid, fleet, manifest, validate
 from . import fixtures as F
 from . import simulate as S
@@ -81,6 +82,7 @@ class Run:
         self.out = C.output_dir(mode, data_dir)
         self.era5_cache, self.fleet_cache, self.fg_cache = self.cache / "era5", self.cache / "fleet", self.cache / "fingrid"
         self._memo: dict[str, Any] = {}
+        self.source_bindings: dict[str, Path] = {}
         info_path = self.interim / "run_info.json"
         self.info: dict[str, Any] = json.loads(info_path.read_text(encoding="utf-8")) if info_path.is_file() else {}
 
@@ -220,6 +222,8 @@ class Run:
             ds = self.era5()
             osm, osm_meta = fleet.load_osm_cache(self.fleet_cache)
             arc, arc_meta = fleet.load_arcgis_cache(self.fleet_cache)
+            catalog.remember_files(self, (self.fleet_cache / n for n in
+                                          (C.OSM_CACHE_FILE, C.OSM_META_FILE, C.ARCGIS_CACHE_FILE, C.ARCGIS_META_FILE)))
             res = fleet.build_fleet(osm, arc, ds.latitude.values, ds.longitude.values, osm_meta, arc_meta)
             self._memo["fleet"] = res
             t = res.turbines
@@ -314,6 +318,7 @@ class Run:
             need_client = client is not None and (self.refresh or not self._fingrid_cache_complete())
             data = fingrid.load_or_fetch_hourly(self.fg_cache, self.hours[0], self.hours[-1], client=client if need_client else None,
                                                 refresh=self.refresh and client is not None)
+            catalog.remember_files(self, (p for i, col in fingrid.DATASETS.items() for p in fingrid._cache_paths(self.fg_cache, i, col)))
             self._memo["fingrid"] = data
             verification = self._verification(client)
             self._save_info(fingrid={"verification": verification, "reports": data.reports, "cache_meta": data.cache_meta,
@@ -394,9 +399,10 @@ class Run:
 
     # --- site artifact -----------------------------------------------------------------------------------------------
     def export_site(self) -> dict[str, Any]:
+        ds, sim, joined, fleet_result, calib = self.era5(), self.sim(), self.joined()[0], self.fleet_result(), self.calibration()
         fl = self.info.get("fleet", {})
         site = export_site.export_site(
-            self.out, ds=self.era5(), sim=self.sim(), joined=self.joined()[0], fleet=self.fleet_result(), calib=self.calibration(),
+            self.out, ds=ds, sim=sim, joined=joined, fleet=fleet_result, calib=calib, inputs=catalog.export_inputs(self),
             run_mode=self.mode, synthetic=self.synthetic,
             provenance={"era5": self.info.get("era5", {}).get("source"), "fleet_snapshot": fl.get("snapshot"),
                         "fingrid_verification": self.info.get("fingrid", {}).get("verification", {}).get("overall")},

@@ -215,6 +215,11 @@
     <!-- ===================== Solar view 1: site simulation ===================== -->
     <section id="view-solar-simulate" class="view" aria-labelledby="h-ssim" hidden>
       <h2 id="h-ssim">Solar site simulation</h2>
+      <section class="panel" aria-labelledby="h-sol-trace">
+        <h3 id="h-sol-trace">Dataset provenance</h3>
+        <p><a href="/api/v1/datasets">Browse the dataset catalog (JSON)</a></p>
+        <div id="sol-trace"></div>
+      </section>
       <div id="sol-notice" class="notice" hidden>
         <p><strong>Some inputs are unavailable in this run:</strong></p>
         <ul id="sol-notice-list" class="plain-list"></ul>
@@ -319,7 +324,7 @@
         <h4>Hours by irradiance source</h4>
         <ul id="sol-reasons" class="plain-list"></ul>
         <details id="sol-table-details">
-          <summary>Show data table</summary>
+          <summary>Show hourly output, actual irradiance source and fallback reason</summary>
           <div class="table-wrap" tabindex="0" role="region" aria-label="Hourly solar simulation values, scrollable">
             <table id="sol-table"><caption>Hourly simulated solar output (UTC)</caption>
               <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Power (MW)</th><th scope="col">Capacity factor</th><th scope="col">Energy (MWh)</th><th scope="col">Irradiance source</th><th scope="col">Fallback reason</th></tr></thead>
@@ -343,6 +348,11 @@
     <!-- ===================== Solar view 2: national overview ===================== -->
     <section id="view-solar-overview" class="view" aria-labelledby="h-sov" hidden>
       <h2 id="h-sov">Solar: Finland overview</h2>
+      <section class="panel" aria-labelledby="h-sov-trace">
+        <h3 id="h-sov-trace">Dataset provenance</h3>
+        <p><a href="/api/v1/datasets">Browse the dataset catalog (JSON)</a></p>
+        <div id="sov-trace"></div>
+      </section>
       <p>Modelled national PV power (ERA5-only and hybrid) next to Fingrid's solar forecast. Fingrid's small-scale surplus has a different scope and is shown separately.</p>
       <div id="sov-notice" class="notice" hidden>
         <p><strong>Some inputs are unavailable in this run:</strong></p>

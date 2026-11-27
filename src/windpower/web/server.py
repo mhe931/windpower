@@ -10,8 +10,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
+from .catalog import build_catalog
 from .data import API_VERSION, ApiError, SiteData, SiteDataError, national_csv, simulate_csv
 from .solar_data import SolarSiteData, solar_national_csv, solar_simulate_csv, GENERATE_HINT
 
@@ -83,13 +84,36 @@ def make_handler(site: "SiteData | None", static_dir: Path = STATIC_DIR, quiet: 
         def run(q: dict[str, list[str]]):
             if solar is None:
                 raise ApiError(404, "solar_artifact_not_built", "The solar artifact has not been built. " + GENERATE_HINT)
-            return fn(q)
+            return {**fn(q), **solar_identity}
         return run
+
+    def solar_download(fn):
+        """A page left open across a server restart must not download a different version."""
+        def run(q):
+            query = dict(q)
+            expected = query.pop("version_id", None)
+            if expected is not None and expected != [solar_identity.get("version_id") or "not-recorded"]:
+                raise ApiError(409, "dataset_changed", "The solar dataset has changed. Reload the page before downloading.")
+            return fn(query)
+        return need_solar(run)
+
+    def solar_result(fn, path):
+        def run(q):
+            res = fn(q)
+            params = {**res["request"], "version_id": solar_identity["version_id"] or "not-recorded"}
+            return {**res, "csv_href": f"{path}.csv?{urlencode(params)}"}
+        return need_solar(run)
 
     def wind(name: str):
         return lambda q: getattr(site, name)(q)
 
     p = f"/api/{API_VERSION}"
+    discovery, versions = build_catalog(site, solar, p)
+    solar_identity = {k: r[k] for r in discovery["datasets"] if r["kind"] == "solar"
+                      for k in ("dataset_id", "version_id", "href", "provenance_status")}
+    api[f"{p}/datasets"] = jsonify(only_none(lambda: discovery))
+    for href, detail in versions.items():
+        api[href] = jsonify(only_none(lambda detail=detail: detail))
     api[f"{p}/meta"] = jsonify(need_wind(only_none(lambda: site.meta())))  # type: ignore[union-attr]
     api[f"{p}/archetypes"] = jsonify(need_wind(only_none(lambda: site.archetype_list())))  # type: ignore[union-attr]
     api[f"{p}/simulate"] = jsonify(need_wind(wind("simulate")))
@@ -100,12 +124,14 @@ def make_handler(site: "SiteData | None", static_dir: Path = STATIC_DIR, quiet: 
     api[f"{s}/meta"] = jsonify(need_solar(only_none(lambda: solar.meta())))  # type: ignore[union-attr]
     api[f"{s}/grid"] = jsonify(need_solar(only_none(lambda: solar.grid_response())))  # type: ignore[union-attr]
     api[f"{s}/coverage"] = jsonify(need_solar(only_none(lambda: solar.coverage_response())))  # type: ignore[union-attr]
-    api[f"{s}/simulate"] = jsonify(need_solar(lambda q: solar.simulate(q)))  # type: ignore[union-attr]
-    api[f"{s}/simulate.csv"] = csv_route(need_solar(lambda q: solar.simulate(q)), solar_simulate_csv, lambda r: f"solar_simulation_{r['request']['mode']}")  # type: ignore[union-attr]
-    api[f"{s}/national"] = jsonify(need_solar(lambda q: solar.national_series(q)))  # type: ignore[union-attr]
-    api[f"{s}/national.csv"] = csv_route(need_solar(lambda q: solar.national_series(q)), solar_national_csv, "national_solar")  # type: ignore[union-attr]
+    api[f"{s}/simulate"] = jsonify(solar_result(lambda q: solar.simulate(q), f"{s}/simulate"))  # type: ignore[union-attr]
+    api[f"{s}/simulate.csv"] = csv_route(solar_download(lambda q: solar.simulate(q)), solar_simulate_csv, lambda r: f"solar_simulation_{r['request']['mode']}")  # type: ignore[union-attr]
+    api[f"{s}/national"] = jsonify(solar_result(lambda q: solar.national_series(q), f"{s}/national"))  # type: ignore[union-attr]
+    api[f"{s}/national.csv"] = csv_route(solar_download(lambda q: solar.national_series(q)), solar_national_csv, "national_solar")  # type: ignore[union-attr]
 
     def label_for(path: str) -> "dict[str, Any] | None":
+        if path.startswith(f"{p}/datasets"):
+            return None  # Catalog errors must not include free text from either site's manifest.
         primary = (solar if path.startswith(f"{p}/solar") else site) or site or solar
         return primary.label_block() if primary is not None else None
 
@@ -136,7 +162,8 @@ def make_handler(site: "SiteData | None", static_dir: Path = STATIC_DIR, quiet: 
 
         def _handle(self) -> None:
             if len(self.path) > MAX_URL_LENGTH:
-                return self._error(ApiError(414, "uri_too_long", "Request URL is too long."))
+                return self._error(ApiError(414, "uri_too_long", "Request URL is too long."),
+                                   f"{p}/datasets" if self.path.startswith(f"{p}/datasets") else "")
             path = ""
             try:
                 parts = urlsplit(self.path)

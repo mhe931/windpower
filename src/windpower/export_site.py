@@ -25,9 +25,10 @@ import xarray as xr
 from . import __version__
 from . import calibrate as K
 from . import config as C
+from . import dataset_record as catalog
 from . import simulate as S
 from .fleet import FleetResult
-from .io_utils import atomic_write_bytes, atomic_write_json, iso_utc, sha256_file, utc_now_iso
+from .io_utils import atomic_write_bytes, atomic_write_json, iso_utc, utc_now_iso
 from .manifest import licence_block
 
 ARTIFACT_SCHEMA_VERSION = "1.0"
@@ -58,7 +59,7 @@ def _meta(run_mode: str, synthetic: bool, units: Mapping[str, str], what: str) -
 def export_site(
     out_root: "str | Path", *, ds: xr.Dataset, sim: S.SimulationResult, joined: pd.DataFrame, fleet: FleetResult,
     calib: "K.CalibrationResult | None", run_mode: str, synthetic: bool, provenance: "Mapping[str, Any] | None" = None,
-    arcgis_meta: "Mapping[str, Any] | None" = None,
+    arcgis_meta: "Mapping[str, Any] | None" = None, inputs=None,
 ) -> dict[str, Any]:
     """Write site/v1 under `out_root` and return its manifest. Raises ExportSizeError above 15 MB."""
     out = Path(out_root) / SITE_DIR
@@ -73,6 +74,7 @@ def export_site(
     unit_all = {"wind_speed": "m s-1", "roughness": "m", "power": "MW", "capacity": "MW", "energy": "MWh", "capacity_factor": "1"}
     first, last = iso_utc(t_index[0]), iso_utc(t_index[-1])
     flags = _meta(run_mode, synthetic, unit_all, "")
+    (out / catalog.NAME).unlink(missing_ok=True)
 
     # wind field
     w16 = wind["wnd100m"].values.astype("<f2")
@@ -143,11 +145,6 @@ def export_site(
                                       "trained on train blocks, see metrics for out-of-sample error")
     atomic_write_json(out / "national_hourly.json", nat)
 
-    files = [{"path": p.name, "bytes": p.stat().st_size, "sha256": sha256_file(p)} for p in sorted(out.iterdir())
-             if p.is_file() and p.name != "manifest.json"]
-    total = sum(f["bytes"] for f in files)
-    if total > MAX_BYTES:
-        raise ExportSizeError(f"site/v1 is {total / 1e6:.1f} MB (> {MAX_BYTES / 1e6:.0f} MB limit)")
     manifest = {
         **flags, "content": "artifact manifest", "generated_utc": utc_now_iso(),
         "grid": {"n_lat": n_y, "n_lon": n_x, "cell_size_deg": C.GRID_RES_DEG, "lat_range": [float(lats[0]), float(lats[-1])],
@@ -157,9 +154,20 @@ def export_site(
         "provenance": dict(provenance or {}),
         "calibration_applied_to_site_simulation": False,
         "licences": licence_block(synthetic, arcgis_meta),
-        "files": files, "total_bytes": total,
         "attribution": "Contains modified Copernicus Climate Change Service information; (c) OpenStreetMap contributors"
                        if not synthetic else "SYNTHETIC data: nothing here is derived from Copernicus, OpenStreetMap, Fingrid or Finnish registry data",
     }
+    files = catalog.write_dataset(out, solar=False, mode=run_mode, inputs=inputs, files=catalog.WIND_FILES,
+                                  coverage={"first_hour_utc": first, "last_hour_utc": last, "hours": n_t, "step": "1h"},
+                                  grid=manifest["grid"], units=unit_all,
+                                  settings={"engine": "atlite", "site_calibration": False, "inference_series": calib is not None,
+                                            "block_hours": K.BLOCK_HOURS, "split_seed": K.SPLIT_SEED},
+                                  quality={"theoretical_hours": n_t, "observed_hours": int(avail.sum()),
+                                           "missing_observed_hours": int((~avail).sum())})
+    total = sum(f["bytes"] for f in files)
+    if total > MAX_BYTES:
+        (out / catalog.NAME).unlink()
+        raise ExportSizeError(f"site/v1 is {total / 1e6:.1f} MB (> {MAX_BYTES / 1e6:.0f} MB limit)")
+    manifest.update(files=files, total_bytes=total)
     atomic_write_json(out / "manifest.json", manifest)
     return manifest
