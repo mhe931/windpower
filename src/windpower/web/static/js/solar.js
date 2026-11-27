@@ -1,5 +1,5 @@
-// Solar views: site simulation (map, settings, result) and national overview. Talks only to /api/v1/solar/*.
-import { getJson, apiUrl, ApiError } from "./api.js";
+// Solar views: site simulation, national overview and their selected catalog version.
+import { getJson, ApiError } from "./api.js";
 import { $, h, s, clear } from "./dom.js";
 import { fmtDateTime, fmtDate, fmtNum, isoDay, parseUtc } from "./format.js";
 import { drawChart, legendItem } from "./chart.js";
@@ -43,6 +43,37 @@ function setPartialNotices(meta) {
 }
 
 // ---------------------------------------------------------------- start-up
+function renderTrace(meta, detail) {
+  for (const id of ["sol-trace", "sov-trace"]) {
+    const box = $(id);
+    if (!meta.href) {
+      box.textContent = `Dataset version not recorded (${meta.provenance_status} provenance). The available data can still be used.`;
+      continue;
+    }
+    box.append(h("p", {}, `Dataset ${meta.dataset_id} · Version `, h("code", {}, meta.version_id), " · ",
+      h("a", { href: meta.href }, "View this dataset version (JSON)")));
+    if (!detail) {
+      box.append(h("p", {}, "Version settings could not be loaded."));
+      continue;
+    }
+    const c = detail.coverage, p = detail.settings;
+    box.append(h("p", {}, `Coverage: ${c.first_hour_utc} to ${c.last_hour_utc} (${c.hours} hourly UTC values).`),
+      h("p", {}, `Panel: ${p.panel ?? "not recorded"}; tilt ${p.slope_deg ?? "—"}°, azimuth ${p.azimuth_deg ?? "—"}°, inverter efficiency ${p.inverter_efficiency ?? "—"}. ` +
+        `ERA5 convention: ${p.era5_convention ?? "not recorded"}; minimum satellite area fraction: ${p.satellite_min_area_fraction ?? "not recorded"}.`));
+    const rules = [p.selected_time?.selection, p.selected_time?.era5_stamp_rule, p.sarah_hourly?.validity,
+      p.hybrid_irradiance?.fallback];
+    if (id === "sov-trace") rules.push(p.national_allocation?.capacity_series, p.national_allocation?.national_mw);
+    if (rules.some(Boolean)) box.append(h("details", {}, h("summary", {}, "Recorded processing rules"),
+      h("ul", {}, ...rules.filter(Boolean).map((rule) => h("li", {}, rule)))));
+  }
+}
+
+function checkVersion(res) {
+  if (res.version_id !== S.meta.version_id) {
+    throw new ApiError(409, "dataset_changed", "The solar dataset has changed. Reload the page to use the new version.");
+  }
+}
+
 export async function initSolar(st) {
   try {
     S.meta = await getJson(`${API}/meta`);
@@ -52,7 +83,10 @@ export async function initSolar(st) {
     return;
   }
   st.meta = S.meta;
-  S.coverage = await getJson(`${API}/coverage`).catch(() => null);
+  const [coverage, detail] = await Promise.all([getJson(`${API}/coverage`).catch(() => null),
+    S.meta.href ? getJson(S.meta.href).catch(() => null) : null]);
+  S.coverage = coverage;
+  renderTrace(S.meta, detail);
   setPartialNotices(S.meta);
   initSimulation(S.meta);
   initOverview(S.meta);
@@ -235,6 +269,7 @@ async function runSimulation() {
   try {
     const res = await getJson(`${API}/simulate`, params);
     if (token !== S.simToken) return;
+    checkVersion(res);
     renderSimulation(res);
   } catch (err) {
     if (token !== S.simToken) return;
@@ -309,7 +344,7 @@ function renderSimulation(res) {
   det.open = false;
   det.querySelector("tbody").replaceChildren();
   bindTable(det, det.querySelector("tbody"), () => data.time_utc.map((u, i) => [fmtDateTime(parseUtc(u)), fmtNum(data.power_mw[i], 4), fmtNum(data.capacity_factor[i], 4), fmtNum(data.energy_mwh[i], 4), data.irradiance_source[i], data.fallback_reason[i] ?? ""]));
-  $("sol-csv").href = apiUrl(`${API}/simulate.csv`, { lat: rq.lat, lon: rq.lon, start: rq.start, end: rq.end, capacity_mwp: rq.capacity_mwp, mode: rq.mode });
+  $("sol-csv").href = res.csv_href;
   $("sol-status").textContent = `Simulation complete: ${fmtNum(sm.total_mwh, 2)} MWh over ${fmtNum(sm.hours, 0)} hours, ${fmtNum(sm.satellite_hours, 0)} satellite hours and ${fmtNum(sm.fallback_hours, 0)} ERA5 fallback hours.`;
 }
 
@@ -346,6 +381,7 @@ async function loadOverview(params) {
   try {
     const res = await getJson(`${API}/national`, params);
     if (token !== S.ovToken) return;
+    checkVersion(res);
     renderOverview(res);
   } catch (err) {
     if (token !== S.ovToken) return;
@@ -461,7 +497,7 @@ function renderOverview(res) {
     csv.removeAttribute("download");
     csv.textContent = "Download CSV: none available";
   } else {
-    csv.href = apiUrl(`${API}/national.csv`, { start: res.request.start, end: res.request.end });
+    csv.href = res.csv_href;
     csv.setAttribute("download", "");
     csv.textContent = "Download CSV of the plotted series";
     $("sov-table").tHead.replaceChildren(h("tr", {}, h("th", { scope: "col" }, "Time (UTC)"), ...cols.map((r) => h("th", { scope: "col" }, `${r.title} (${r.unit})`))));

@@ -59,6 +59,7 @@ python -m pytest -q
 
 `pip install -e .` builds in an isolated environment and therefore needs `setuptools` from the package index
 (add `--no-build-isolation` if it is already installed). Full real-data run: see `docs/reproduce.md`.
+For a byte-verified, offline rebuild and comparison of the July solar sites, see [Replay a recorded solar site](docs/replay.md).
 
 ## Local website (Milestone 2)
 

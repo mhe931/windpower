@@ -30,6 +30,7 @@ import pandas as pd
 import xarray as xr
 
 from . import config as C
+from . import dataset_record as catalog
 from . import era5 as E5
 from . import era5_solar as ES
 from . import fingrid as FG
@@ -43,7 +44,7 @@ from . import solar_public as SPUB
 from . import solar_pv as P
 from . import solar_validate as SV
 from .export_site_solar import export_site_solar
-from .io_utils import SYNTHETIC_STAMP, CredentialUnavailableError, atomic_write_json, atomic_write_with, display_path, iso_utc, sha256_file, utc_hour_range
+from .io_utils import SYNTHETIC_STAMP, CredentialUnavailableError, atomic_write_json, atomic_write_with, display_path, iso_utc, jsonable, sha256_file, utc_hour_range
 from .pipeline import Unavailable
 from .validate import CheckResult, failed_checks, results_frame
 
@@ -93,7 +94,7 @@ def parse_window(start: "str | None", end: "str | None") -> pd.DatetimeIndex:
 
 def _hash_files(path: "str | Path") -> list[dict[str, Any]]:
     p = Path(path)
-    files = sorted(q for q in p.rglob("*") if q.is_file()) if p.is_dir() else [p]
+    files = sorted([*p.glob("*.nc"), *p.glob("*.zip")]) if p.is_dir() else [p]
     return [{"name": q.name, "bytes": q.stat().st_size, "sha256": sha256_file(q)} for q in files]
 
 
@@ -116,6 +117,8 @@ class SolarRun:
         self.explicit = {"SIS": sarah_sis_dir, "SID": sarah_sid_dir}
         self.era5_solar_path, self.era5_convention = era5_solar_path, era5_convention
         self._memo: dict[str, Any] = {}
+        self.source_bindings: dict[str, Path] = {}
+        self._sarah_ingested = None
         self.gaps: dict[str, str] = {}
         info_path = self.interim / "run_info.json"
         self.info: dict[str, Any] = json.loads(info_path.read_text(encoding="utf-8")) if info_path.is_file() else {}
@@ -192,10 +195,17 @@ class SolarRun:
                     "source_valid_hourly_share": float(hourly.valid.mean()), "synthetic": self.synthetic}
         self._write_sarah_products(grid, inv, summary)
         self._memo["sarah_ongrid"] = grid
-        self._save_info(sarah={"inventory": {k: {kk: vv for kk, vv in v.items() if kk != "sha256"} for k, v in inv.items()},
-                               "sha256": {k: v.get("sha256") for k, v in inv.items()}, "coverage": summary,
-                               "inputs": {k: str(v) for k, v in dirs.items()}, "files_read": {"SIS": sis.files, "SID": sid.files},
-                               "source": "SYNTHETIC fixture" if self.synthetic else "CM SAF SARAH-3 ICDR (SIS, SID), read in place"})
+        self._sarah_ingested = True
+        read = {"SIS": sis.files, "SID": sid.files}
+        hashes = {k: v.get("sha256") for k, v in inv.items()}
+        if self.synthetic and self.hash_inputs:
+            hashes = {k: {n: sha256_file(dirs[k] / n) for n in names} for k, names in read.items()}
+        if not self.hash_inputs:
+            catalog.remember_files(self, (dirs[k] / n for k, names in read.items() for n in names))
+        record = {"inventory": {k: {kk: vv for kk, vv in v.items() if kk != "sha256"} for k, v in inv.items()},
+                  "sha256": hashes, "coverage": summary, "inputs": {k: str(v) for k, v in dirs.items()}, "files_read": read,
+                  "source": "SYNTHETIC fixture" if self.synthetic else "CM SAF SARAH-3 ICDR (SIS, SID), read in place"}
+        self._save_info(sarah=record | {"lineage_sha256": self._sarah_lineage(record)})
         for k in ("SIS", "SID"):
             flagged = inv[k]["window_flagged_steps"]
             self.say(f"[ingest-sarah] {k}: {inv[k]['n_files']} files, {inv[k]['time']['first_utc']} .. {inv[k]['time']['last_utc']}, "
@@ -237,13 +247,20 @@ class SolarRun:
         atomic_write_json(self.out / INVENTORY_FILE, {"synthetic": self.synthetic, "inventory": inv, "coverage": summary,
                                                       "notes": ["fully covered = static: at least one fully valid daytime hour per source pixel, area share >= threshold of the ERA5 cell"]})
 
+    def _sarah_lineage(self, record):
+        """Tie raw-file evidence to the actual intermediate bytes and transformation."""
+        return catalog.digest({"inputs": jsonable({k: record.get(k) for k in ("inputs", "files_read", "sha256", "coverage")}),
+                               "products": {n: sha256_file(self.out / n) for n in (HOURLY_FILE, CELLS_FILE, PIXELS_FILE)},
+                               "code": catalog.code_digest("config io_utils sarah sarah_regrid solar_geometry solar_pipeline")})
+
     def _sarah_products_current(self, dirs: "dict[str, Path]") -> bool:
         s = self.info.get("sarah")
         if self.refresh or not s or not all((self.out / f).is_file() for f in (HOURLY_FILE, CELLS_FILE, PIXELS_FILE)):
             return False
         cov = s.get("coverage", {})
         return (s.get("inputs") == {k: str(v) for k, v in dirs.items()} and cov.get("first_hour_utc") == iso_utc(self.hours[0])
-                and cov.get("last_hour_utc") == iso_utc(self.hours[-1]) and cov.get("grid", {}).get("name") == self.grid.name)
+                and cov.get("last_hour_utc") == iso_utc(self.hours[-1]) and cov.get("grid", {}).get("name") == self.grid.name
+                and s.get("lineage_sha256") and s["lineage_sha256"] == self._sarah_lineage(s))
 
     def _load_sarah_products(self) -> R.SarahOnGrid:
         with xr.open_dataset(self.out / HOURLY_FILE) as d:
@@ -275,6 +292,8 @@ class SolarRun:
                 dirs = self.sarah_dirs()
             if self._sarah_products_current(dirs):
                 self._memo["sarah_ongrid"] = self._load_sarah_products()
+                self._sarah_ingested = False
+                catalog.remember_files(self, (self.out / n for n in (HOURLY_FILE, CELLS_FILE, PIXELS_FILE)))
             else:
                 self._ingest_sarah(self.sarah_dirs() if self.synthetic else dirs)
         except Unavailable as exc:
@@ -381,6 +400,7 @@ class SolarRun:
                 raise Unavailable([{"input": "public inputs", "reason": reason, "key": "public"}])
             return None
         pub = SPUB.load_public(self.public_cache)
+        catalog.remember_files(self, (self.public_cache / n for n in (SPUB.PLANTS_META, SPUB.POP_META, SPUB.MUNI_META)))
         self._memo["public"] = pub
         compact = {k: {kk: vv for kk, vv in m.items() if kk != "report"} for k, m in pub.meta.items()}
         compact["plants"]["report"] = pub.plants_report
@@ -429,6 +449,7 @@ class SolarRun:
         self.say(f"[ingest-fingrid-solar] series {sorted(data.reports)}; unavailable {sorted(data.unavailable) or 'none'}; verification {verification['overall']}")
 
     def _record_fingrid(self, data: FS.SolarFingridData, verification: Mapping[str, Any]) -> None:
+        catalog.remember_files(self, (p for i in data.cache_meta for p in FG._cache_paths(self.fg_cache, i, FS.RAW_COLUMN[i])))
         for i, r in data.unavailable.items():
             self._gap(f"fingrid_{i}", r)
         self._save_info(fingrid_solar={"verification": verification, "reports": {str(k): v for k, v in data.reports.items()},
@@ -684,7 +705,8 @@ class SolarRun:
                                 "reason": f"nothing to export: sarah: {self.gaps.get('sarah')}; era5: {self.gaps.get('era5')}"}])
         cov = self.info.get("sarah", {}).get("coverage") if g is not None else None
         site = export_site_solar(self.out, mode=self.mode, synthetic=self.synthetic, hours=self.hours, grid=self.grid, ongrid=g, cubes=cubes, allocation=alloc,
-                                 national=table, info=self.info, unavailable=dict(self.gaps), coverage_summary=cov)
+                                 national=table, info=self.info, unavailable=dict(self.gaps), coverage_summary=cov,
+                                 inputs=catalog.export_inputs(self, sarah_ingested=self._sarah_ingested))
         self._refresh_manifest()
         modes = ", ".join(f"{k}: {'yes' if v['available'] else 'unavailable'}" for k, v in site["modes"].items())
         self.say(f"[export-site-solar] {self.out / 'site' / 'solar' / 'v1'}: {site['total_bytes'] / 1e6:.2f} MB, {len(site['files'])} files ({site['label']}); modes {modes}")
