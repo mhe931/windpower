@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,30 @@ SYNTHETIC_STAMP = "SYNTHETIC"
 
 class CredentialUnavailableError(RuntimeError):
     """A required credential (API key, CDS account) is not configured."""
+
+
+# --- path redaction (text shown to users must not carry home-directory paths) -----------------------------
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_ABS_PATH = re.compile(r"(?<![\w.])(?:[A-Za-z]:[\\/]|/(?=[\w.~+-]+/))[^\s,;\"'`)\]]*")
+
+
+def display_path(path: "str | Path") -> str:
+    """Repo-relative form of `path`; outside the repo only the last two components (`...\\parent\\name`) are kept."""
+    p = Path(str(path))
+    try:
+        return str(p.relative_to(_REPO_ROOT))
+    except ValueError:
+        parts = p.parts[-2:] if len(p.parts) > 2 else p.parts
+        return "..." + os.sep + os.sep.join(parts)
+
+
+def redact_paths(text: str) -> str:
+    """Replace every absolute path inside `text` with `display_path` (a trailing sentence period is kept)."""
+    def sub(m: "re.Match[str]") -> str:
+        raw = m.group(0)
+        tail = raw[len(raw.rstrip(".")):]
+        return display_path(raw.rstrip(".")) + tail
+    return _ABS_PATH.sub(sub, text)
 
 
 # --- atomic writes ---------------------------------------------------------

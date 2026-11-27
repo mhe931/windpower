@@ -74,6 +74,22 @@ runtime; demo/synthetic data is flagged by a persistent banner, in every API res
 national calibration is applied to site simulations. If the artifact is missing, `serve` prints the command that
 creates it. Details, API, accessibility notes and gaps: `docs/site.md`.
 
+**Solar in the website.** The same server can serve a Wind | Solar switch (hash routes `#simulate`, `#overview`,
+`#solar-simulate`, `#solar-overview`) from two artifacts:
+
+```powershell
+python -m windpower demo                                  # wind demo artifact (SYNTHETIC)
+python -m windpower solar-demo                            # solar demo artifact (SYNTHETIC) -> data\outputs\solar-demo\site\solar\v1
+python -m windpower serve --mode demo --solar-mode solar-demo --port 8765   # wind AND solar
+python -m windpower serve --mode solar-demo --port 8765   # solar (and whatever wind artifact exists)
+python -m windpower solar-all                             # REAL SARAH-3 + public data; ERA5/Fingrid parts stay "unavailable" without their inputs
+python -m windpower serve                                 # no flags: auto-discovers real (full, solar) before demo before smoke
+```
+
+The solar page offers a 0.25 degree cell simulation (lat/lon, dates inside the artifact window, capacity in MWp,
+ERA5-only or hybrid irradiance, CSV) and a national overview (modelled MW vs Fingrid 248 forecast, 362 AV06
+small-scale surplus and 267 capacity). Modes whose inputs are missing are shown as unavailable with the exact reason.
+
 ## Stages
 
 `python -m windpower <stage> [--mode smoke|full|demo] [--data-dir DIR] [--offline] [--refresh] [--start ..] [--end ..]`
@@ -91,7 +107,11 @@ creates it. Details, API, accessibility notes and gaps: `docs/site.md`.
 | `smoke` | all of the above offline on the small synthetic fixture | |
 | `demo` | same on the synthetic Finland grid, labelled DEMO | |
 | `all` | all of the above for `--mode` (full needs credentials) | |
-| `serve` | local website (map, hourly simulation, national overview) from `site/v1`; never generates data | see `docs/site.md` |
+| `serve` | local website (map, hourly simulation, national overview; wind and/or solar) from `site/v1` and `site/solar/v1`; never generates data; `--solar-mode`, `--solar-site-dir` | see `docs/site.md` |
+| `ingest-sarah` | **solar (S1)**: CM SAF SARAH-3 SIS/SID daily files → hourly trapezoid means, conservative regrid onto the 44 x 53 ERA5 solar grid, coverage map; `--mode solar` (real, default), `solar-smoke`, `solar-demo` (SYNTHETIC). Inputs: `--sarah-sis-dir/--sarah-sid-dir` (env `WINDPOWER_SARAH_SIS_DIR/_SID_DIR`; default `data/interim/smoke/ORD73128` / `ORD73129` if present), `--window-start/--window-end` (default 2025-07-01..2025-07-31) | `sarah_hourly_era5grid.nc`, `sarah_coverage_cells.csv`, `sarah_coverage_pixels.nc`, `sarah_inventory.json`; run info in `data/interim/<mode>/run_info.json`. Method and assumptions: `docs/assumptions.md` S1-S17 |
+| `ingest-era5-solar`, `ingest-solar-public`, `ingest-fingrid-solar` | **solar (S2)**: ERA5 radiation (CDS or `--era5-solar-path`), public plant list + Statistics Finland WFS (explicit network), Fingrid 267/248/362 (`FINGRID_API_KEY`) | caches under `data/cache/solar/` |
+| `solar-hourly`, `solar-pv`, `solar-national`, `solar-validate`, `export-site-solar` | ERA5 hourly + irradiance comparison; atlite CF cubes; allocation + national MW/GWh; hard checks + reconciliation + manifest; `site/solar/v1` | see `docs/solar.md` |
+| `solar-smoke`, `solar-demo`, `solar-all` | the whole solar chain: offline SYNTHETIC (7 x 9 / 44 x 53 cells) or real with partial-availability handling | `data/outputs/<solar mode>/` |
 
 Stages rebuild what they need from the raw caches, so they can be run separately; in synthetic modes missing
 fixtures are generated, in `full` mode missing inputs are an error - **never a silent fallback to synthetic data**.
@@ -103,6 +123,7 @@ fixtures are generated, in `full` mode missing inputs are an error - **never a s
 
 ```
 src/windpower/   config io_utils fixtures era5 fleet fingrid simulate calibrate validate manifest export_site pipeline cli web/ (server, data, static/)
+                 solar: sarah sarah_regrid solar_geometry era5_solar solar_pv solar_pipeline solar_public fingrid_solar solar_national solar_validate export_site_solar fixtures_solar
 tests/           offline pytest suite (sockets blocked, credentials stripped)
 scripts/         run_smoke.ps1  run_full.ps1  run_site.ps1
 docs/            assumptions  data-sources  licenses  reconciliation  reproduce  site

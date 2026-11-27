@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Finland wind simulator</title>
+  <title>Finland wind and solar simulator</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/js/main.js"></script>
 </head>
@@ -16,18 +16,39 @@
   </div>
 
   <header class="site-header">
-    <h1>Finland wind simulator</h1>
-    <p class="lede">Hourly wind power from ERA5 reanalysis wind, for one grid cell or for the whole country. Runs locally; nothing is sent to other sites.</p>
+    <h1>Finland wind and solar simulator</h1>
+    <p class="lede">Hourly wind and solar PV power from ERA5 reanalysis (and, for solar, CM SAF SARAH-3 satellite irradiance), for one grid cell or for the whole country. Runs locally; nothing is sent to other sites.</p>
+    <nav aria-label="Energy source">
+      <ul class="tabs source-switch">
+        <li><a href="#simulate" id="nav-wind">Wind</a></li>
+        <li><a href="#solar-simulate" id="nav-solar">Solar</a></li>
+      </ul>
+    </nav>
     <nav aria-label="Views">
-      <ul class="tabs">
-        <li><a href="#simulate" id="nav-simulate">Site simulation</a></li>
-        <li><a href="#overview" id="nav-overview">Finland overview</a></li>
+      <ul class="tabs" id="tabs-wind">
+        <li><a href="#simulate" id="nav-simulate">Wind site simulation</a></li>
+        <li><a href="#overview" id="nav-overview">Wind: Finland overview</a></li>
+      </ul>
+      <ul class="tabs" id="tabs-solar" hidden>
+        <li><a href="#solar-simulate" id="nav-solar-simulate">Solar site simulation</a></li>
+        <li><a href="#solar-overview" id="nav-solar-overview">Solar: Finland overview</a></li>
       </ul>
     </nav>
   </header>
 
   <main id="main" tabindex="-1">
-    <noscript><p class="notice">This page needs JavaScript for the map and charts. The data is also available as CSV from the API: <code>/api/v1/simulate.csv</code> and <code>/api/v1/national.csv</code>.</p></noscript>
+    <noscript><p class="notice">This page needs JavaScript for the map and charts. The data is also available as CSV from the API: <code>/api/v1/simulate.csv</code>, <code>/api/v1/national.csv</code>, <code>/api/v1/solar/simulate.csv</code> and <code>/api/v1/solar/national.csv</code>.</p></noscript>
+
+    <section id="wind-missing" class="panel" hidden aria-labelledby="h-wm">
+      <h2 id="h-wm">Wind artifact not built</h2>
+      <p id="wind-missing-text"></p>
+      <p>Build a SYNTHETIC one with <code>python -m windpower demo</code> and restart the server; the Solar views are independent of it.</p>
+    </section>
+    <section id="solar-missing" class="panel" hidden aria-labelledby="h-sm">
+      <h2 id="h-sm">Solar artifact not built</h2>
+      <p id="solar-missing-text"></p>
+      <p>Build a SYNTHETIC one with <code>python -m windpower solar-demo</code>, or a real one with <code>python -m windpower solar-all</code> (partial without ERA5 and Fingrid), then restart the server. The Wind views are independent of it.</p>
+    </section>
 
     <!-- ===================== View 1: site simulation ===================== -->
     <section id="view-simulate" class="view" aria-labelledby="h-sim">
@@ -191,12 +212,216 @@
         <ul id="ov-missing-list" class="plain-list"></ul>
       </section>
     </section>
+    <!-- ===================== Solar view 1: site simulation ===================== -->
+    <section id="view-solar-simulate" class="view" aria-labelledby="h-ssim" hidden>
+      <h2 id="h-ssim">Solar site simulation</h2>
+      <div id="sol-notice" class="notice" hidden>
+        <p><strong>Some inputs are unavailable in this run:</strong></p>
+        <ul id="sol-notice-list" class="plain-list"></ul>
+      </div>
+
+      <div class="layout">
+        <section class="panel" aria-labelledby="h-sloc">
+          <h3 id="h-sloc">1. Location</h3>
+          <p id="sol-map-help" class="hint">Click the map, or focus it and use the arrow keys to move one grid cell. The latitude and longitude fields below do the same thing.</p>
+          <div id="sol-map" class="map" tabindex="0" role="group" aria-roledescription="map" aria-label="Map of Finland with the ERA5 solar grid and the satellite coverage" aria-describedby="sol-map-help sol-map-status"></div>
+          <p id="sol-map-status" class="hint map-status"></p>
+          <div class="check-row">
+            <input id="sol-overlay" type="checkbox" checked>
+            <label for="sol-overlay">Show satellite coverage on the map (hatched cells)</label>
+          </div>
+          <ul id="sol-map-legend" class="map-legend"></ul>
+          <p id="sol-coverage-note" class="hint"></p>
+          <button type="button" class="link-button" id="sol-map-help-open">Map keyboard help</button>
+          <dialog id="sol-map-dialog" aria-labelledby="sol-map-dialog-title">
+            <h4 id="sol-map-dialog-title">Map keyboard help</h4>
+            <ul>
+              <li>Tab to the map, then press the arrow keys to move the selected cell by one cell.</li>
+              <li>Press Enter to run the simulation for the selected cell.</li>
+              <li>The hatched cells are covered by the satellite product; you can hide the hatching with the checkbox.</li>
+              <li>You can always type the latitude and longitude instead.</li>
+            </ul>
+            <form method="dialog"><button class="button">Close</button></form>
+          </dialog>
+        </section>
+
+        <section class="panel" aria-labelledby="h-sset">
+          <h3 id="h-sset">2. Settings</h3>
+          <form id="sol-form" novalidate>
+            <div class="grid-2">
+              <div class="field">
+                <label for="sol-lat">Latitude (°N)</label>
+                <input id="sol-lat" name="sol-lat" type="number" inputmode="decimal" step="any" required aria-invalid="false" data-error="err-sol-lat">
+                <p id="err-sol-lat" class="field-error" hidden></p>
+              </div>
+              <div class="field">
+                <label for="sol-lon">Longitude (°E)</label>
+                <input id="sol-lon" name="sol-lon" type="number" inputmode="decimal" step="any" required aria-invalid="false" data-error="err-sol-lon">
+                <p id="err-sol-lon" class="field-error" hidden></p>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="sol-start">First day (UTC)</label>
+                <input id="sol-start" name="sol-start" type="date" required aria-invalid="false" data-error="err-sol-start">
+                <p id="err-sol-start" class="field-error" hidden></p>
+              </div>
+              <div class="field">
+                <label for="sol-end">Last day (UTC, inclusive)</label>
+                <input id="sol-end" name="sol-end" type="date" required aria-invalid="false" data-error="err-sol-end">
+                <p id="err-sol-end" class="field-error" hidden></p>
+              </div>
+            </div>
+            <p id="sol-range-hint" class="hint"></p>
+            <div class="field">
+              <label for="sol-capacity">Installed capacity (MWp)</label>
+              <input id="sol-capacity" name="sol-capacity" type="number" inputmode="decimal" step="any" required aria-invalid="false" aria-describedby="sol-cap-hint" data-error="err-sol-capacity">
+              <p id="sol-cap-hint" class="hint"></p>
+              <p id="err-sol-capacity" class="field-error" hidden></p>
+            </div>
+            <fieldset class="field radio-group" aria-describedby="sol-mode-help">
+              <legend>Irradiance input</legend>
+              <p id="sol-mode-help" class="hint">Choose where the irradiance comes from. A mode that cannot be built from the available inputs is disabled and says why.</p>
+              <div class="radio-row">
+                <input id="sol-mode-hybrid" type="radio" name="sol_mode" value="hybrid" aria-describedby="sol-mode-hybrid-note">
+                <div><label for="sol-mode-hybrid">Hybrid: satellite where the cell is covered, otherwise ERA5</label><p id="sol-mode-hybrid-note" class="hint"></p></div>
+              </div>
+              <div class="radio-row">
+                <input id="sol-mode-era5" type="radio" name="sol_mode" value="era5" aria-describedby="sol-mode-era5-note">
+                <div><label for="sol-mode-era5">ERA5 only</label><p id="sol-mode-era5-note" class="hint"></p></div>
+              </div>
+              <p id="err-sol_mode" class="field-error" hidden></p>
+            </fieldset>
+            <div id="sol-errors" class="error-box" tabindex="-1" hidden>
+              <h4>The simulation could not run</h4>
+              <p id="sol-error-text"></p>
+            </div>
+            <div class="actions">
+              <button type="submit" id="sol-run" class="button primary" aria-describedby="sol-run-note">Run simulation</button>
+            </div>
+            <p id="sol-run-note" class="hint" hidden></p>
+          </form>
+        </section>
+      </div>
+
+      <section class="panel results" aria-labelledby="h-sres" id="sol-results" hidden>
+        <h3 id="h-sres">3. Result</h3>
+        <p id="sol-status" class="sr-announce" role="status" aria-live="polite"></p>
+        <p id="sol-cell" class="hint"></p>
+        <p id="sol-mode-note" class="notice"></p>
+        <dl class="stats" id="sol-stats"></dl>
+        <figure class="chart-figure">
+          <figcaption id="sol-caption"></figcaption>
+          <div class="legend" id="sol-legend"></div>
+          <svg id="sol-chart" class="chart" role="img" aria-labelledby="sol-caption"></svg>
+          <output id="sol-readout" class="readout" for="sol-chart"></output>
+        </figure>
+        <h4>Hours by irradiance source</h4>
+        <ul id="sol-reasons" class="plain-list"></ul>
+        <details id="sol-table-details">
+          <summary>Show data table</summary>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Hourly solar simulation values, scrollable">
+            <table id="sol-table"><caption>Hourly simulated solar output (UTC)</caption>
+              <thead><tr><th scope="col">Time (UTC)</th><th scope="col">Power (MW)</th><th scope="col">Capacity factor</th><th scope="col">Energy (MWh)</th><th scope="col">Irradiance source</th><th scope="col">Fallback reason</th></tr></thead>
+              <tbody></tbody></table>
+          </div>
+        </details>
+        <p class="actions"><a id="sol-csv" class="button" href="#" download>Download CSV</a></p>
+        <aside class="caveats" aria-label="How to read this result">
+          <h4>How to read this</h4>
+          <ul>
+            <li><strong>No calibration.</strong> No national calibration and no curtailment correction is applied. Power in MW = capacity factor × the nominal capacity in MWp; energy in MWh = MW × 1 h; night hours are 0.</li>
+            <li><strong>Coarse grid.</strong> The data has 0.25° resolution: a cell is about 28 km north–south by <span id="sol-cell-ew">14</span> km east–west at the selected latitude (the east–west size shrinks towards the north). The result is the cell-average irradiance, not a micro-sited estimate.</li>
+            <li><strong>Fixed panel.</strong> A fixed south-facing panel (azimuth 180°) with 40° tilt, the atlite crystalline-silicon (CSi) model with inverter efficiency 0.90. Real roofs have many orientations.</li>
+            <li><strong>Satellite vs. ERA5.</strong> The hybrid input uses SARAH-3 direct and diffuse irradiance only where at least 99.9 % of the cell area has valid satellite data in that hour. <strong>Northern fallback:</strong> the satellite does not cover the north and north-east of Finland (nothing north of 65° N), so those cells use ERA5 and are marked <em>era5_fallback</em> with the reason.</li>
+            <li><strong>Times</strong> are UTC, hour start.</li>
+          </ul>
+        </aside>
+      </section>
+    </section>
+
+    <!-- ===================== Solar view 2: national overview ===================== -->
+    <section id="view-solar-overview" class="view" aria-labelledby="h-sov" hidden>
+      <h2 id="h-sov">Solar: Finland overview</h2>
+      <p>Modelled national PV power (ERA5-only and hybrid) next to Fingrid's solar forecast. Fingrid's small-scale surplus has a different scope and is shown separately.</p>
+      <div id="sov-notice" class="notice" hidden>
+        <p><strong>Some inputs are unavailable in this run:</strong></p>
+        <ul id="sov-notice-list" class="plain-list"></ul>
+      </div>
+
+      <form id="sov-form" class="panel" novalidate aria-label="Date range">
+        <div class="grid-3">
+          <div class="field">
+            <label for="sov-start">First day (UTC)</label>
+            <input id="sov-start" type="date" required>
+          </div>
+          <div class="field">
+            <label for="sov-end">Last day (UTC, inclusive)</label>
+            <input id="sov-end" type="date" required>
+          </div>
+          <div class="actions inline">
+            <button type="submit" class="button primary">Update charts</button>
+            <button type="button" class="button" id="sov-all">Show all</button>
+            <button type="button" class="button" id="sov-week">Last 7 days</button>
+          </div>
+        </div>
+        <p class="hint">You can also drag across a chart to zoom to that period.</p>
+        <div id="sov-errors" class="error-box" tabindex="-1" hidden>
+          <h4>The overview could not be updated</h4>
+          <p id="sov-error-text"></p>
+        </div>
+      </form>
+
+      <section class="panel" aria-labelledby="h-sov-tiles">
+        <h3 id="h-sov-tiles">Series and coverage</h3>
+        <ul id="sov-tiles" class="tiles"></ul>
+      </section>
+
+      <section class="panel" aria-labelledby="h-sov-model">
+        <h3 id="h-sov-model">Modelled national PV and Fingrid forecast</h3>
+        <p id="sov-status" class="sr-announce" role="status" aria-live="polite"></p>
+        <p id="sov-model-unavailable" class="hint state-line" hidden></p>
+        <figure class="chart-figure" id="sov-fig1">
+          <figcaption id="sov-caption"></figcaption>
+          <div class="legend" id="sov-legend"></div>
+          <svg id="sov-chart" class="chart" role="img" aria-labelledby="sov-caption"></svg>
+          <output id="sov-readout" class="readout" for="sov-chart"></output>
+        </figure>
+        <p id="sov-note1" class="notice">The modelled series are <strong>uncalibrated</strong> (no national calibration, no curtailment correction); capacity comes from Fingrid dataset 267, which is <strong>not an official capacity</strong>. Fingrid 248 is a <strong>forecast</strong>, not measured generation.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="h-sov-sur" id="sov-sur-panel">
+        <h3 id="h-sov-sur">Fingrid small-scale surplus, solar (362, AV06) — different scope</h3>
+        <p id="sov-sur-unavailable" class="hint state-line" hidden></p>
+        <figure class="chart-figure" id="sov-fig2">
+          <figcaption id="sov-caption2"></figcaption>
+          <div class="legend" id="sov-legend2"></div>
+          <svg id="sov-chart2" class="chart" role="img" aria-labelledby="sov-caption2"></svg>
+          <output id="sov-readout2" class="readout" for="sov-chart2"></output>
+        </figure>
+        <p id="sov-note2" class="notice"><strong>Small-scale surplus only (kWh/h shown as MW, after the producers' own consumption) — a different scope, not total generation.</strong> It has its own axis and is not comparable in size with the modelled national series; use it for the shape and timing of the daily cycle.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="h-sov-more">
+        <h3 id="h-sov-more">Summary, data table and export</h3>
+        <dl class="stats" id="sov-stats"></dl>
+        <p id="sov-more-empty" class="hint" hidden></p>
+        <details id="sov-table-details">
+          <summary>Show data table</summary>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Hourly national solar values, scrollable">
+            <table id="sov-table"><caption>Hourly national solar series (UTC)</caption><thead></thead><tbody></tbody></table>
+          </div>
+        </details>
+        <p class="actions"><a id="sov-csv" class="button" href="#" download>Download CSV of the plotted series</a></p>
+      </section>
+    </section>
   </main>
 
   <footer class="site-footer">
     <p id="footer-label"></p>
     <p id="footer-attribution"></p>
     <p>Model <span id="footer-model"></span> · run mode <span id="footer-mode"></span> · installed fleet capacity <span id="footer-capacity"></span></p>
+    <p id="footer-solar" hidden></p>
   </footer>
 </body>
 </html>
