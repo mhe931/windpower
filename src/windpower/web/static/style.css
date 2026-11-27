@@ -142,6 +142,59 @@ thead th { position: sticky; top: 0; background: var(--surface); }
 .plain-list { max-height: 12rem; overflow: auto; }
 .site-footer { padding-block: var(--gap); color: var(--muted); border-top: 1px solid var(--rule); font-size: 0.92em; }
 
+/* Solar: source switch, series styles, hatching, tiles, radio group */
+.source-switch { margin-top: 1rem; border-bottom-width: 0; }
+.source-switch a { font-weight: 700; border-color: var(--rule); border-bottom: 2px solid var(--rule); border-radius: 0.4rem; padding-inline: 1.6rem; }
+.source-switch a[aria-current="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.source-switch + * { margin-top: 0; }
+input[type="radio"], input[type="checkbox"] { width: 1.4rem; min-height: 1.4rem; height: 1.4rem; flex: none; accent-color: var(--accent); margin: 0.2rem 0 0; }
+.check-row, .radio-row { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0.4rem 0; }
+.check-row label, .radio-row label { margin: 0; font-weight: 600; }
+.radio-row p { margin: 0; }
+.radio-row input:disabled + div { opacity: 0.8; }
+.radio-row input:disabled + div label::after { content: " (unavailable)"; font-weight: 400; }
+fieldset { border: 1px solid var(--rule); border-radius: 0.4rem; padding: 0.5rem 0.9rem 0.75rem; min-width: 0; }
+legend { font-weight: 700; padding-inline: 0.3rem; }
+.map-legend { list-style: none; padding: 0; margin: 0.25rem 0 0.5rem; display: grid; gap: 0.25rem; }
+.map-legend li { display: flex; gap: 0.5rem; align-items: center; font-size: 0.92em; }
+.map-swatch { width: 1.9rem; height: 1.2rem; flex: none; }
+.swatch-box { stroke: var(--text); stroke-width: 1.2; fill: var(--bg); }
+.swatch-box.plain { fill: var(--bg); }
+.swatch-box.selected { fill: color-mix(in srgb, var(--series-obs) 35%, transparent); stroke-width: 3; }
+.hatch-bg { fill: var(--bg); }
+.hatch-line { stroke: var(--accent); stroke-width: 2; }
+.map .cov-overlay { stroke: none; pointer-events: none; }
+.map .hatch-line { stroke-width: 1.6; }
+.chart .band-fallback { stroke: none; }
+.chart .hatch-line { stroke: var(--muted); stroke-width: 1.5; }
+.chart .hatch-bg { fill: var(--surface); }
+:root { --series-era5: #0a5aa8; --series-hybrid: #14702e; --series-fc: #a14000; --series-sur: #7a3fb0; --series-pow: #0a5aa8; }
+@media (prefers-color-scheme: dark) { :root { --series-era5: #7db8ff; --series-hybrid: #7fdc98; --series-fc: #ffb066; --series-sur: #d2a6ff; --series-pow: #7db8ff; } }
+.chart .series-era5, .swatch-era5 { stroke: var(--series-era5); }
+.chart .series-hybrid, .swatch-hybrid { stroke: var(--series-hybrid); stroke-dasharray: 8 4; }
+.chart .series-fc, .swatch-fc { stroke: var(--series-fc); stroke-dasharray: 2 4; }
+.chart .series-sur, .swatch-sur { stroke: var(--series-sur); stroke-dasharray: 10 3 2 3; }
+.chart .series-pow, .swatch-pow { stroke: var(--series-pow); }
+.chart .series-era5, .chart .series-hybrid, .chart .series-pow, .chart .series-sur { stroke-width: 2.5px; }
+.chart .series-fc { stroke-width: 3px; stroke-linecap: butt; }
+.chart .label-era5 { fill: var(--series-era5); font-weight: 700; }
+.chart .label-hybrid { fill: var(--series-hybrid); font-weight: 700; }
+.chart .label-fc { fill: var(--series-fc); font-weight: 700; }
+.chart .label-sur { fill: var(--series-sur); font-weight: 700; }
+.chart .label-pow { fill: var(--series-pow); font-weight: 700; }
+.tiles { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
+.tile { background: var(--bg); border: 2px solid var(--rule); border-radius: 0.4rem; padding: 0.6rem 0.8rem; display: grid; gap: 0.25rem; align-content: start; }
+.tile.unavailable { border-style: dashed; border-color: var(--danger); }
+.tile-state { font-weight: 600; }
+.tile.unavailable .tile-state { color: var(--danger); }
+.tile small { color: var(--muted); }
+.stats[hidden], details[hidden], .notice[hidden], .state-line[hidden] { display: none; }
+.state-line { margin: 0.25rem 0 0.75rem; font-weight: 600; }
+.button.disabled, .button[aria-disabled="true"], .button:disabled { border-color: var(--muted); color: var(--muted); background: transparent; cursor: not-allowed; filter: none; }
+.button.primary:disabled { background: transparent; }
+#sol-notice ul, #sov-notice ul { margin: 0.25rem 0 0; }
+#sol-notice li, #sov-notice li { margin-bottom: 0.4rem; }
+
 @media (prefers-reduced-motion: no-preference) {
   .button, input, select { transition: background-color 0.15s, border-color 0.15s; }
   html { scroll-behavior: smooth; }

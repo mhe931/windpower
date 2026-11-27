@@ -9,6 +9,7 @@ import xarray as xr
 
 from windpower import config as C
 from windpower import fixtures as F
+from windpower import fixtures_solar as FP
 
 START = "2025-07-01T00:00:00"
 HOURS = 48
@@ -127,6 +128,73 @@ def smoke_run(tmp_path_factory):
             code = cli.main(["smoke", "--data-dir", str(data)])
     finally:
         mp.undo()
+    return code, buf.getvalue(), data
+
+
+SOLAR_START, SOLAR_END = "2025-07-30T00:00:00", "2025-07-31T23:00:00"   # 48 h; the last hour needs the Aug 1 00:00 SARAH step
+
+
+@pytest.fixture(scope="session")
+def sarah_spec() -> F.SarahFixtureSpec:
+    return F.SarahFixtureSpec(void_steps=("2025-07-31T12:00",), bad_steps=("2025-07-30T10:30",))
+
+
+@pytest.fixture(scope="session")
+def sarah_smoke(tmp_path_factory, sarah_spec):
+    """SYNTHETIC CM SAF-format order (3 days over a month boundary) -> hourly means -> regridded onto the solar smoke grid."""
+    from types import SimpleNamespace
+
+    from windpower import sarah, sarah_regrid
+
+    base = tmp_path_factory.mktemp("sarah_smoke")
+    sis_dir, sid_dir = F.write_sarah_cache(base, "2025-07-30", 3, sarah_spec)
+    hours = pd.date_range(SOLAR_START, SOLAR_END, freq="h")
+    last = hours[-1] + pd.Timedelta(hours=1)
+    sis, sid = sarah.load_series(sis_dir, "SIS", hours[0], last), sarah.load_series(sid_dir, "SID", hours[0], last)
+    hourly = sarah.hourly_means(sis, sid, hours)
+    return SimpleNamespace(sis_dir=sis_dir, sid_dir=sid_dir, hours=hours, sis=sis, sid=sid, hourly=hourly,
+                           ongrid=sarah_regrid.regrid_hourly(hourly, C.SOLAR_SMOKE_GRID))
+
+
+@pytest.fixture(scope="session")
+def era5_solar_fx() -> F.Era5SolarFixture:
+    return F.synthetic_era5_solar(C.SOLAR_SMOKE_GRID, SOLAR_START, 48, seed=5)
+
+
+@pytest.fixture(scope="session")
+def era5_solar_result(era5_solar_fx):
+    from windpower import era5_solar
+
+    return era5_solar.load_solar_era5(era5_solar_fx.raw, SOLAR_START, SOLAR_END)
+
+
+@pytest.fixture(scope="session")
+def public_fx() -> "FP.PublicFixture":
+    return FP.synthetic_public(C.SOLAR_SMOKE_GRID, seed=3)
+
+
+@pytest.fixture(scope="session")
+def public_cache(tmp_path_factory, public_fx):
+    """SYNTHETIC public inputs fetched through the fake session into a cache folder (the real fetch code path)."""
+    from windpower import solar_public
+
+    d = tmp_path_factory.mktemp("public_cache")
+    solar_public.fetch_public(d, FP.FakePublicSession(public_fx), sleep=lambda s: None)
+    return d
+
+
+@pytest.fixture(scope="session")
+def solar_smoke_run(tmp_path_factory):
+    """One real `solar-smoke` CLI run (sockets blocked): (exit code, stdout, data_dir)."""
+    import contextlib
+    import io
+
+    from windpower import cli
+
+    data = tmp_path_factory.mktemp("solar_smoke_data")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = cli.main(["solar-smoke", "--data-dir", str(data)])
     return code, buf.getvalue(), data
 
 

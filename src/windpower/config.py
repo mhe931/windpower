@@ -9,7 +9,15 @@ from pathlib import Path
 # --- run modes and paths ---------------------------------------------------
 RUN_MODES = ("smoke", "full", "demo")
 SYNTHETIC_MODES = ("smoke", "demo")   # modes that never touch real data or the network
+# Solar pipeline modes (separate tuples: the wind constants above are part of the wind contract).
+SOLAR_RUN_MODES = ("solar-smoke", "solar-demo", "solar")
+SOLAR_SYNTHETIC_MODES = ("solar-smoke", "solar-demo")
+ALL_RUN_MODES = (*RUN_MODES, *SOLAR_RUN_MODES)
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def is_synthetic_mode(run_mode: str) -> bool:
+    return run_mode in SYNTHETIC_MODES or run_mode in SOLAR_SYNTHETIC_MODES
 
 
 def data_dir(base: "str | Path | None" = None) -> Path:
@@ -23,7 +31,7 @@ def data_dir(base: "str | Path | None" = None) -> Path:
 def cache_dir(run_mode: str = "full", base: "str | Path | None" = None) -> Path:
     """Raw downloads. Synthetic modes get their own cache so fixture data never mixes with real data."""
     _check_mode(run_mode)
-    sub = f"synthetic_{run_mode}" if run_mode in SYNTHETIC_MODES else "real"
+    sub = f"synthetic_{run_mode}" if is_synthetic_mode(run_mode) else ("solar" if run_mode == "solar" else "real")
     return data_dir(base) / "cache" / sub
 
 
@@ -38,8 +46,8 @@ def output_dir(run_mode: str = "full", base: "str | Path | None" = None) -> Path
 
 
 def _check_mode(run_mode: str) -> None:
-    if run_mode not in RUN_MODES:
-        raise ValueError(f"run_mode must be one of {RUN_MODES}, got {run_mode!r}")
+    if run_mode not in ALL_RUN_MODES:
+        raise ValueError(f"run_mode must be one of {ALL_RUN_MODES}, got {run_mode!r}")
 
 
 # --- study window ----------------------------------------------------------
@@ -87,6 +95,33 @@ class GridSpec:
 FINLAND_GRID = GridSpec("finland", 59.5, 70.5, 19.0, 31.75)
 SMOKE_GRID = GridSpec("smoke", 60.0, 63.0, 21.0, 25.0)
 GRIDS = {g.name: g for g in (FINLAND_GRID, SMOKE_GRID)}
+
+# --- solar grids -------------------------------------------------------------
+# The solar report's ERA5 cutout (atlite, area 59.5-70.25 N, 19.0-32.0 E) is 44 x 53 = 2,332 cells. It is NOT the
+# wind grid above (45 x 52, 59.5-70.5 N, 19.0-31.75 E): one row more to the north, one column less to the east in
+# the wind grid. Both grids stay as they are; solar code must only use FINLAND_SOLAR.
+FINLAND_SOLAR = GridSpec("finland_solar", 59.5, 70.25, 19.0, 32.0)
+SOLAR_SMOKE_GRID = GridSpec("solar_smoke", 60.0, 61.5, 21.0, 23.0)   # SYNTHETIC fixtures only
+SOLAR_GRIDS = {g.name: g for g in (FINLAND_SOLAR, SOLAR_SMOKE_GRID)}
+
+# --- solar (CM SAF SARAH-3 + ERA5) ---------------------------------------------
+SARAH_RES_DEG = 0.05
+SARAH_FILL = -999
+SARAH_MAX_WM2 = 1500.0               # upper plausibility bound of a valid irradiance sample
+SARAH_DIFFUSE_TOL_WM2 = 1.0          # SIS - SID in [-1, 0) is clipped to 0, below -1 the sample is invalid
+SATELLITE_MIN_AREA_FRACTION = 0.999  # a cell-hour uses SARAH only if >= 99.9 % of the ERA5 cell area is valid
+SARAH_DAYTIME_MIN_ELEVATION_DEG = 5.0
+SOLAR_WINDOW_START = "2025-07-01"    # inclusive dates (UTC); the default window is July 2025 (744 hours)
+SOLAR_WINDOW_END = "2025-07-31"
+SOLAR_REPORT_TARGETS = {"covered_cells": 777, "grid_cells": 2332, "hours": 744}   # compared, never forced
+SARAH_SIS_ENV, SARAH_SID_ENV, ERA5_SOLAR_ENV = "WINDPOWER_SARAH_SIS_DIR", "WINDPOWER_SARAH_SID_DIR", "WINDPOWER_ERA5_SOLAR"
+SARAH_DEFAULT_DIRS = {"SIS": "ORD73128", "SID": "ORD73129"}   # below <data>/interim/smoke/ (a misleading name; real SARAH-3 files)
+
+# PV baseline of the solar report
+PV_PANEL = "CSi"
+PV_SLOPE_DEG = 40.0
+PV_AZIMUTH_DEG = 180.0
+PV_INVERTER_EFFICIENCY = 0.90
 
 # --- ERA5 variables --------------------------------------------------------
 CDS_DATASET = "reanalysis-era5-single-levels"

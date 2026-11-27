@@ -26,6 +26,12 @@ export function createMap(container, meta, { onSelect, onActivate }) {
   for (let j = 0; j <= nLon; j++) d += `M${X(west + j * res).toFixed(1)} 0V${H.toFixed(1)}`;
   for (let i = 0; i <= nLat; i++) d += `M0 ${(i * res * SCALE).toFixed(1)}H${W.toFixed(1)}`;
   svg.append(s("path", { class: "grid-line", d }));
+  // optional coverage overlay (hatched cells; the pattern keeps it readable without colour)
+  const pid = `cov-hatch-${container.id || "map"}`;
+  svg.append(s("defs", {}, s("pattern", { id: pid, width: 9, height: 9, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" },
+    s("rect", { width: 9, height: 9, class: "hatch-bg" }), s("line", { x1: 0, y1: 0, x2: 0, y2: 9, class: "hatch-line" }))));
+  const overlay = s("path", { class: "cov-overlay", fill: `url(#${pid})`, visibility: "hidden" });
+  svg.append(overlay);
   for (const ring of Object.values(meta.region.outlines_lonlat)) {
     svg.append(s("polygon", { class: "outline", points: ring.map(([lo, la]) => `${X(lo).toFixed(1)},${Y(la).toFixed(1)}`).join(" ") }));
   }
@@ -102,6 +108,20 @@ export function createMap(container, meta, { onSelect, onActivate }) {
       draw(nearest(lats, lat), nearest(lons, lon), lat, lon);
     },
     cellCenter: (i, j) => ({ lat: lats[i], lon: lons[j] }),
+    /** Hatch the cells flagged in `flat` (row-major, latitude ascending); `null` removes the overlay. */
+    setOverlay(flat) {
+      if (!flat) return overlay.setAttribute("visibility", "hidden");
+      const cw = (res * kx * SCALE).toFixed(1);
+      const ch = (res * SCALE).toFixed(1);
+      let od = "";
+      for (let i = 0; i < nLat; i++) {
+        for (let j = 0; j < nLon; j++) if (flat[i * nLon + j]) od += `M${X(lons[j] - res / 2).toFixed(1)} ${Y(lats[i] + res / 2).toFixed(1)}h${cw}v${ch}h-${cw}z`;
+      }
+      overlay.setAttribute("d", od);
+      overlay.setAttribute("visibility", "visible");
+    },
+    showOverlay: (on) => overlay.setAttribute("visibility", on ? "visible" : "hidden"),
+    nLon,
     current: () => cur,
   };
 }

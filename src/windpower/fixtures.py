@@ -443,3 +443,205 @@ class FakeFingridSession:
                                                                "nextPage": page + 1 if page < last else None,
                                                                "pageSize": size, "total": len(rows)}})
 
+
+# --- solar: CM SAF SARAH-3 format ------------------------------------------------------------------------------------
+SARAH_FILE_SUFFIX = "0000004UD10001I1UD.nc"   # as in the real order (e.g. SISin202507010000004UD10001I1UD.nc)
+
+
+@dataclass(frozen=True)
+class SarahFixtureSpec:
+    """Shape of a SYNTHETIC SARAH-3 order: 0.05 deg grid, northern cutoff, a static patch of fill, flagged steps."""
+
+    lat_min: float = 59.9           # outer edges of the ordered area (not centres)
+    lat_max: float = 61.5
+    lon_min: float = 20.9
+    lon_max: float = 23.1
+    res: float = C.SARAH_RES_DEG
+    north_cutoff_lat: "float | None" = 61.0                      # pixels with centre >= this never carry data
+    patch: "tuple[float, float, float, float] | None" = (60.3, 60.45, 21.5, 21.7)   # lat0, lat1, lon0, lon1 of static fill
+    void_steps: tuple[str, ...] = ()   # record_status 1, all values fill
+    bad_steps: tuple[str, ...] = ()    # record_status 2, values present but flagged
+    seed: int = 2026
+
+    @property
+    def n_lat(self) -> int:
+        return int(round((self.lat_max - self.lat_min) / self.res))
+
+    @property
+    def n_lon(self) -> int:
+        return int(round((self.lon_max - self.lon_min) / self.res))
+
+    def lat_bounds(self) -> np.ndarray:
+        e = self.lat_min + self.res * np.arange(self.n_lat + 1)
+        return np.stack([e[:-1], e[1:]], axis=1)
+
+    def lon_bounds(self) -> np.ndarray:
+        e = self.lon_min + self.res * np.arange(self.n_lon + 1)
+        return np.stack([e[:-1], e[1:]], axis=1)
+
+
+def _sarah_day_fields(spec: SarahFixtureSpec, date: pd.Timestamp) -> "tuple[pd.DatetimeIndex, np.ndarray, np.ndarray]":
+    """(times, SIS, SID) in W m-2 for one UTC day; NaN marks fill. SID <= SIS everywhere (physical, no negative diffuse)."""
+    from . import solar_geometry as G
+
+    times = pd.date_range(date, periods=48, freq="30min")
+    lat, lon = spec.lat_bounds().mean(axis=1), spec.lon_bounds().mean(axis=1)
+    cz = np.maximum(G.cos_zenith(times, lat, lon), 0.0)
+    rng = np.random.default_rng([spec.seed, int(date.value // 86_400_000_000_000)])
+    k = np.arange(48)[:, None, None]
+    gx = np.linspace(-1, 1, lon.size)[None, None, :]
+    clear = np.clip(0.65 + 0.25 * np.sin(2 * np.pi * (k / 48 * 3 + rng.random())) + 0.06 * gx
+                    + 0.05 * rng.standard_normal((48, lat.size, lon.size)), 0.1, 1.0)
+    sis = np.round(1000.0 * cz * clear)
+    sid = np.round(sis * np.clip(0.1 + 0.8 * (clear - 0.1) / 0.9, 0.05, 0.9))
+    static = np.zeros((lat.size, lon.size), dtype=bool)
+    if spec.north_cutoff_lat is not None:
+        static |= (lat >= spec.north_cutoff_lat)[:, None]
+    if spec.patch is not None:
+        a, b, c, d = spec.patch
+        static |= ((lat >= a) & (lat <= b))[:, None] & ((lon >= c) & (lon <= d))[None, :]
+    sis[:, static] = np.nan
+    sid[:, static] = np.nan
+    return times, sis, sid
+
+
+def write_sarah_day(directory: "str | Path", kind: str, date: Any, spec: SarahFixtureSpec = SarahFixtureSpec()) -> Path:
+    """One CM SAF-format daily file from the fixture physics: int16 fill -999, lat/lon bnds, record_status."""
+    date = pd.Timestamp(date).normalize()
+    times, sis, sid = _sarah_day_fields(spec, date)
+    data = {"SIS": sis, "SID": sid}[kind].copy()
+    status = np.zeros(48, dtype=np.int8)
+    for iso in spec.void_steps:
+        i = times.get_indexer([pd.Timestamp(iso)])[0]
+        if i >= 0:
+            status[i] = 1
+            data[i] = np.nan
+    for iso in spec.bad_steps:
+        i = times.get_indexer([pd.Timestamp(iso)])[0]
+        if i >= 0:
+            status[i] = 2
+    return write_sarah_arrays(directory, kind, date, data, status, spec.lat_bounds(), spec.lon_bounds(), seed=spec.seed)
+
+
+def write_sarah_arrays(directory: "str | Path", kind: str, date: Any, data: np.ndarray, status: np.ndarray, lat_bnds: np.ndarray,
+                       lon_bnds: np.ndarray, seed: "int | None" = None) -> Path:
+    """Write explicit values (48, n_lat, n_lon; NaN = fill) and record_status (48,) as one CM SAF-format daily file.
+
+    Values are rounded to whole W m-2 (int16 on disk). Centres are the bounds midpoints (float32, as in the real files).
+    """
+    date = pd.Timestamp(date).normalize()
+    times = pd.date_range(date, periods=48, freq="30min")
+    lat = lat_bnds.mean(axis=1).astype(np.float32)
+    lon = lon_bnds.mean(axis=1).astype(np.float32)
+    standard = {"SIS": "surface_downwelling_shortwave_flux_in_air", "SID": "surface_direct_downwelling_shortwave_flux_in_air"}[kind]
+    ds = xr.Dataset(
+        {
+            "lon_bnds": (("lon", "bnds"), lon_bnds.astype(np.float32)),
+            "lat_bnds": (("lat", "bnds"), lat_bnds.astype(np.float32)),
+            kind: (("time", "lat", "lon"), np.round(data).astype(np.float32), {"standard_name": standard, "units": "W m-2", "cell_methods": "time: point"}),
+            "record_status": (("time",), np.asarray(status, dtype=np.int8), {"long_name": "Record Status", "flag_values": np.array([0, 1, 2], dtype=np.int8),
+                                                                             "flag_meanings": "ok void bad_quality"}),
+        },
+        coords={"lon": ("lon", lon, {"units": "degrees_east", "bounds": "lon_bnds"}), "lat": ("lat", lat, {"units": "degrees_north", "bounds": "lat_bnds"}),
+                "time": times.values.astype("datetime64[ns]")},
+        attrs={"title": f"{SYNTHETIC_STAMP} CM SAF-format SARAH-3 fixture (not real data)", "synthetic": SYNTHETIC_STAMP, "note": STAMP_TEXT,
+               "id": "SYNTHETIC", "institution": "SYNTHETIC", "Conventions": "CF-1.7,ACDD-1.3", "seed": -1 if seed is None else seed},
+    )
+    ds["time"].encoding.update(units="hours since 1983-1-1 00:00:00", calendar="proleptic_gregorian", dtype="float64")
+    ds[kind].encoding.update(dtype="int16", _FillValue=np.int16(C.SARAH_FILL), missing_value=np.int16(C.SARAH_FILL), zlib=True, complevel=1)
+    path = Path(directory) / f"{kind}in{date:%Y%m%d}{SARAH_FILE_SUFFIX}"
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    return atomic_write_with(path, lambda tmp: ds.to_netcdf(tmp, engine="netcdf4"))
+
+
+def write_sarah_files(directory: "str | Path", kind: str, first_date: Any, n_days: int, spec: SarahFixtureSpec = SarahFixtureSpec()) -> list[Path]:
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    return [write_sarah_day(directory, kind, d, spec) for d in pd.date_range(pd.Timestamp(first_date).normalize(), periods=n_days, freq="D")]
+
+
+def write_sarah_cache(base: "str | Path", first_date: Any, n_days: int, spec: SarahFixtureSpec = SarahFixtureSpec()) -> "tuple[Path, Path]":
+    """SYNTHETIC SIS and SID folders below `base`; returns (sis_dir, sid_dir)."""
+    sis_dir, sid_dir = Path(base) / "SYNTHETIC_SIS", Path(base) / "SYNTHETIC_SID"
+    for d in (sis_dir, sid_dir):
+        for old in d.glob("*.nc") if d.is_dir() else ():
+            old.unlink()
+    write_sarah_files(sis_dir, "SIS", first_date, n_days, spec)
+    write_sarah_files(sid_dir, "SID", first_date, n_days, spec)
+    return sis_dir, sid_dir
+
+
+# --- solar: ERA5 radiation fixtures (raw CDS end-stamped + prepared hour-start) ----------------------------------------
+_SOLAR_UNITS = {"ssrd": "J m**-2", "ssr": "J m**-2", "fdir": "J m**-2", "tisr": "J m**-2", "t2m": "K"}
+
+
+@dataclass
+class Era5SolarFixture:
+    raw: xr.Dataset        # CDS-like: valid_time stamps start..end+1h (end-stamped J m-2 accumulations, instantaneous t2m), descending lat
+    prepared: xr.Dataset   # atlite-style hour-start (time, y, x): W m-2 influx_*, albedo, temperature = mean(h, h+1) in K
+    start: pd.Timestamp
+    hours: int
+    grid: C.GridSpec
+
+
+def synthetic_era5_solar(grid: C.GridSpec = C.SOLAR_SMOKE_GRID, start: str = "2025-07-30T00:00:00", hours: int = 48,
+                         seed: int = 2026) -> Era5SolarFixture:
+    """Physically shaped SYNTHETIC ERA5 radiation: TOA from solar geometry, clearness / direct fraction / albedo fields.
+
+    `raw` holds hours+1 stamps (the first stamp only supplies the previous hour's accumulation and the temperature endpoint),
+    exactly what the pipeline needs for `hours` hours; `prepared` is the same physics already labelled by hour start.
+    """
+    from . import solar_geometry as G
+
+    rng = np.random.default_rng(seed)
+    lats, lons = np.array(grid.lats()), np.array(grid.lons())
+    ny, nx, n = lats.size, lons.size, hours + 1
+    t0 = pd.Timestamp(start)
+    interval_starts = pd.date_range(t0 - pd.Timedelta(hours=1), periods=n, freq="h")   # interval i ends at stamp i
+    stamps = pd.date_range(t0, periods=n, freq="h")
+    e0 = 1.0 + 0.033 * np.cos(2 * np.pi * np.asarray(interval_starts.dayofyear) / 365.0)
+    toa = G.SOLAR_CONSTANT_WM2 * e0[:, None, None] * G.interval_mean_cos_zenith(interval_starts, lats, lons)
+    gx, gy = np.linspace(-1, 1, nx)[None, None, :], np.linspace(-1, 1, ny)[None, :, None]
+    kt = np.clip(0.55 + 0.25 * _ar1(rng, n, 0.9)[:, None, None] + 0.05 * gx + 0.06 * rng.standard_normal((n, ny, nx)), 0.1, 0.85)
+    ssrd = toa * kt
+    fdir = ssrd * np.clip(1.3 * kt - 0.25, 0.05, 0.85)
+    albedo = np.broadcast_to(0.15 + 0.08 * gy, (n, ny, nx))
+    ssr = ssrd * (1.0 - albedo)
+    hod = np.asarray(stamps.hour)[:, None, None]
+    t2m = 288.0 + 2.5 * np.sin(2 * np.pi * (hod - 9) / 24) + 0.8 * _ar1(rng, n, 0.97)[:, None, None] - 1.0 * gy + 0.05 * rng.standard_normal((n, ny, nx))
+
+    dims = ("valid_time", "latitude", "longitude")
+    joules = {"tisr": toa, "ssrd": ssrd, "ssr": ssr, "fdir": fdir}
+    raw = xr.Dataset({**{k: (dims, (v * 3600.0).astype(np.float32), {"units": _SOLAR_UNITS[k]}) for k, v in joules.items()},
+                      "t2m": (dims, t2m.astype(np.float32), {"units": "K"})},
+                     coords={"valid_time": stamps.values.astype("datetime64[ns]"), "latitude": lats, "longitude": lons},
+                     attrs={"title": f"{SYNTHETIC_STAMP} ERA5-like solar fixture", "synthetic": SYNTHETIC_STAMP, "note": STAMP_TEXT, "seed": seed,
+                            "grid": grid.name})
+    raw = raw.isel(latitude=slice(None, None, -1))
+
+    h = slice(1, n)   # interval i >= 1 starts at hour start start + (i-1) h
+    pdims = ("time", "y", "x")
+    prepared = xr.Dataset(
+        {"influx_toa": (pdims, toa[h], {"units": "W m**-2"}), "influx_direct": (pdims, fdir[h], {"units": "W m**-2"}),
+         "influx_diffuse": (pdims, (ssrd - fdir)[h], {"units": "W m**-2"}), "albedo": (pdims, np.where(ssrd > 0, albedo, 0.0)[h], {"units": "(0 - 1)"}),
+         "temperature": (pdims, 0.5 * (t2m[:-1] + t2m[1:]), {"units": "K"})},
+        coords={"time": stamps[:-1].values.astype("datetime64[ns]"), "y": lats, "x": lons},
+        attrs={"title": f"{SYNTHETIC_STAMP} prepared hour-start ERA5 solar fixture", "synthetic": SYNTHETIC_STAMP, "note": STAMP_TEXT})
+    return Era5SolarFixture(raw, prepared, t0, hours, grid)
+
+
+def write_era5_solar_zip(ds: xr.Dataset, path: "str | Path") -> Path:
+    """CDS-style ZIP: an `instant` member (t2m) and an `accum` member (ssrd, ssr, fdir, tisr), scalar number/expver coords."""
+    with tempfile.TemporaryDirectory(prefix="fixture_solar_zip_") as tmp:
+        members: list[tuple[str, bytes]] = []
+        for stream, names in (("instant", ("t2m",)), ("accum", ("ssrd", "ssr", "fdir", "tisr"))):
+            p = Path(tmp) / f"{stream}.nc"
+            ds[list(names)].assign_coords(number=0, expver="0001").to_netcdf(p, engine="netcdf4")
+            members.append((f"data_stream-oper_stepType-{stream}.nc", p.read_bytes()))
+
+        def build(out: Path) -> None:
+            with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+                for name, blob in members:
+                    zf.writestr(zipfile.ZipInfo(name, _ZIP_DATE), blob, zipfile.ZIP_DEFLATED)
+
+        return atomic_write_with(path, build)
+

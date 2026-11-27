@@ -39,6 +39,8 @@ DATASETS: dict[int, str] = {
     319: "imbalance_price_eur_mwh",
 }
 EXPECTED_UNITS: dict[int, str] = {181: "MW", 248: "MW", 124: "MW", 319: "EUR/MWh"}
+# Fingrid's real definition of 248 is "MWh/h": a per-hour energy rate, numerically the hourly mean MW. It is accepted next to "MW".
+UNIT_ALIASES: dict[int, tuple[str, ...]] = {248: ("MWh/h",)}
 PAGE_SIZE = 10_000
 REQUEST_DELAY_SEC = 6.5
 MAX_ATTEMPTS = 5
@@ -405,6 +407,9 @@ def verify_datasets(
                 rec.update(status="unit_not_reported", reason="metadata has no unit field")
             elif normalise_unit(unit) == normalise_unit(expected.get(ds_id)):
                 rec["status"] = "verified"
+            elif normalise_unit(unit) in {normalise_unit(a) for a in UNIT_ALIASES.get(ds_id, ())}:
+                rec.update(status="verified", note=f"{unit!r} is accepted as equivalent to {expected.get(ds_id)!r} for dataset {ds_id} "
+                                                  "(energy per hour = mean power)")
             else:
                 rec.update(status="mismatch", reason=f"reported unit {unit!r} != expected {expected.get(ds_id)!r}")
         records.append(rec)

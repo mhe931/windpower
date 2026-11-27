@@ -85,6 +85,81 @@ Chart values, table and CSV come from the same computation: the page draws from 
 link requests the CSV with exactly the parameters echoed in that response (`request.*`); tests check that CSV rows equal
 the JSON values.
 
+## Solar (API v1, `/api/v1/solar/*`)
+
+The server can additionally serve the solar artifact `data/outputs/<solar mode>/site/solar/v1` (written by
+`python -m windpower solar-demo|solar-all|export-site-solar`, see `docs/solar.md`). It is read only from there, is
+validated on start (axes, array sizes, `kind`), and is independent of the wind artifact: either may be missing
+(wind routes then answer `404 wind_artifact_not_built`, solar routes `404 solar_artifact_not_built`, each with the exact
+generation commands; the page shows an explicit "artifact not built" panel for that source).
+
+```powershell
+python -m windpower demo; python -m windpower solar-demo           # SYNTHETIC artifacts, offline
+python -m windpower serve --mode demo --solar-mode solar-demo --port 8765   # wind + solar
+python -m windpower serve --mode solar-demo --port 8765            # solar demo (+ a wind artifact if one is found)
+python -m windpower serve --solar-site-dir D:\path\site\solar\v1   # a custom solar directory, solar only
+python -m windpower solar-all; python -m windpower serve           # real partial run, auto-discovered
+```
+
+`serve` options added: `--solar-mode solar|solar-demo|solar-smoke`, `--solar-site-dir DIR`. `--mode` also accepts the
+solar modes. Selection rules are in `docs/assumptions.md` S35 (an explicit `--site-dir` never pulls in solar and an
+explicit `--solar-site-dir` never pulls in wind).
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/v1/solar/meta` | run mode, SYNTHETIC/DEMO/partial flags, window, 44 x 53 grid (0.25 deg), panel (CSi, 40 deg, azimuth 180, inverter 0.90), units, per-mode availability with exact reasons, series scope texts, coverage summary, statements, licences, Finland outline |
+| `/api/v1/solar/grid` | grid axes and per-cell static fields (satellite-covered flag, coverage fractions, population share, large capacity) |
+| `/api/v1/solar/coverage` | satellite-covered cells, per-cell coverage fraction, 0.05 deg pixel map, threshold (99.9 %), counts |
+| `/api/v1/solar/simulate?lat=&lon=&start=&end=&capacity_mwp=&mode=era5\|hybrid` | hourly `time_utc`, `power_mw`, `capacity_factor`, `energy_mwh`, `irradiance_source`, `fallback_reason` + summary (total MWh, mean CF, peak MW, `satellite_hours`, `fallback_hours`, `fallback_reasons`) and cell metadata |
+| `/api/v1/solar/simulate.csv?...` | same parameters; the CSV of exactly that response |
+| `/api/v1/solar/national?start=&end=` and `national.csv` | every national series with `available`, `reason`, `unit`, `native_unit`, `scope`, values (null = missing, never zero-filled), energy/coverage summary |
+
+Arithmetic: `power_mw = capacity_factor x capacity_mwp`, `energy_mwh = power_mw x 1 h` (hourly values rounded to 1e-6),
+CF is a fraction in [0, 1], night hours are exactly 0. The cell is the 0.25 degree cell containing the point. In
+`hybrid` mode each hour is `satellite` (SARAH-3 direct and diffuse, only where the cell has at least 99.9 % valid area in
+that hour) or `era5_fallback` with a reason (`outside_satellite_domain`: the north/north-east of Finland is not covered
+by the satellite product; `no_coverage`, `partial_coverage`, `missing_or_flagged_step`, `sis_missing`, `sid_missing`,
+`negative_diffuse`). In `era5` mode the source is `era5`. Default `mode` = `hybrid` if available; `capacity_mwp`
+default 1, range 0.001 - 1000. No national calibration and no curtailment is applied.
+
+Errors use the same JSON shape as the wind API. Solar-specific: 400 `missing_parameter`, `invalid_number`, `bad_date`;
+422 `outside_grid`, `outside_finland`, `date_out_of_range` (outside the artifact window), `end_before_start`,
+`capacity_out_of_range`, `unknown_mode`, `mode_unavailable` (message = the precise gap, e.g. "ERA5 solar data not ...").
+
+CSV: `#` header lines (flags `synthetic`/`demo`/`partial_run`, model version, run mode, mode, panel, capacity MWp, cell
+centre, 0.25 degree resolution, cell extent, coverage fraction, "no national calibration, no curtailment", series scopes
+and `source_*` licence/attribution lines for CM SAF/EUMETSAT, Copernicus, Fingrid CC BY 4.0, ...) then the columns
+`time_utc,power_mw,capacity_factor,energy_mwh,irradiance_source,fallback_reason`. The chart, table and CSV link all
+come from one API response; the tests assert CSV rows equal JSON values.
+
+### Solar UI
+
+* A top-level **Wind | Solar** switch (a `nav` with `aria-current`, plain links to `#simulate`/`#overview` and
+  `#solar-simulate`/`#solar-overview`, so it is keyboard operable and works as deep links). A solar-only server opens on Solar.
+* **Solar simulation**: map with the satellite-covered cells overlaid as hatching (a pattern, so it is distinguishable
+  without colour; a legend and a "show coverage" checkbox), latitude/longitude fields, dates limited to the artifact
+  window, capacity in MWp, a radio group for the irradiance mode (unavailable modes are disabled and show their reason),
+  summary (total MWh, mean CF, peak MW, satellite vs ERA5-fallback hours and reasons, a plain-language "northern fallback"
+  explanation), data-table toggle, CSV download, and a text on resolution (0.25 degrees, about 14 x 28 km at 60 N,
+  cell-mean irradiance, fixed 40 degree south-facing panel, no national calibration). Fallback hours are hatched in the chart.
+* **Solar overview**: ERA5-only (solid) and hybrid (dashed) modelled national MW with direct labels; Fingrid 248
+  (dotted) labelled "Fingrid forecast (not measured generation)"; Fingrid 362 AV06 labelled "Small-scale surplus only
+  (kWh/h as MW) - different scope, not total generation" in a **separate panel with its own axis**; 267 capacity as a
+  tile (scope "capacity used in the forecast, not official") and a table/CSV column; coverage tiles per series; explicit unavailable states with the reason text; date-range zoom; CSV
+  of the plotted series.
+* A persistent DEMO/SYNTHETIC banner when flagged, and a notice on partial real runs listing the unavailable inputs
+  **once per cause** (short cause, detail, "Affects: ..."), not once per item; tiles and radio buttons carry only the short text
+  (`reason_short`, e.g. "ERA5 solar data not ingested", "FINGRID_API_KEY not set"). No absolute local paths are ever served
+  (S42). With no usable mode "Run simulation" is disabled and says why; with no available series the CSV button is disabled
+  ("Download CSV: none available") and a chart panel without data shows one short state line. Same hygiene as the wind page: no `innerHTML`, strict CSP, no external requests, light/dark,
+  reduced motion, forced-colors, 320 px to wide screens.
+
+**Solar verification status.** API, CSV, partial artifact, CLI and HTML/CSS structure: pytest
+(`tests/test_web_solar.py`). The solar JavaScript is syntax- and behaviour-**unverified** in a browser by the author
+(Node is not installed and no browser session was run); a manual browser check is still required. The real SARAH-3 +
+public-data run is partial: with no ERA5 or Fingrid input the real artifact serves coverage, grid and the unavailable
+states only. Guidance gap: `npx` is missing here as well, so `modern-web-guidance` was again followed manually.
+
 ## Security notes
 
 Loopback by default; GET/HEAD only; path traversal is blocked (decoded `..`, hidden names, backslashes, NUL, drive

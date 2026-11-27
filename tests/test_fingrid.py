@@ -280,6 +280,22 @@ def test_verify_datasets_unit_mismatch_fails_loudly(two_days):
     assert soft["overall"] == "partial" and soft["datasets"][3]["reason"].startswith("reported unit 'c/kWh'")
 
 
+def test_dataset_248_accepts_fingrids_real_unit_mwh_per_h_but_other_datasets_stay_strict(two_days):
+    """Fingrid defines 248 in 'MWh/h' (energy per hour = mean MW): not a mismatch. 181/124 still need MW."""
+    _, _, fx = two_days
+    assert G.EXPECTED_UNITS == {181: "MW", 248: "MW", 124: "MW", 319: "EUR/MWh"} and G.UNIT_ALIASES == {248: ("MWh/h",)}
+    client, _, _ = make_client(fx, fail_429_once=False, unit_overrides={248: "MWh/h"})
+    block = G.verify_datasets(client)
+    r248 = block["datasets"][1]
+    assert block["overall"] == "verified" and (r248["dataset_id"], r248["status"], r248["reported_unit"]) == (248, "verified", "MWh/h")
+    assert "equivalent" in r248["note"] and "note" not in block["datasets"][0]
+    assert G.verify_datasets(make_client(fx, fail_429_once=False, unit_overrides={248: "mwh / h"})[0])["overall"] == "verified"   # spacing / case
+    for ds_id, wrong in ((181, "MWh/h"), (124, "MWh/h"), (248, "kWh")):
+        c, _, _ = make_client(fx, fail_429_once=False, unit_overrides={ds_id: wrong})
+        with pytest.raises(G.DatasetMismatchError, match=f"dataset {ds_id}: reported unit"):
+            G.verify_datasets(c)
+
+
 def test_verify_datasets_without_credentials_is_unverified():
     block = G.verify_datasets(None)
     assert block["overall"] == "unverified"

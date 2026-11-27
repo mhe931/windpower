@@ -34,3 +34,24 @@ publishing anything derived from real data.
 
 `windpower.fixtures` generates ERA5-like NetCDF/ZIP files, an ArcGIS-like GeoJSON with Finnish field names, an
 Overpass-like JSON and fake Fingrid pages. Everything is stamped `SYNTHETIC`; no third-party data is contained.
+`windpower.fixtures_solar` adds the solar equivalents: an .xlsx plant list, a fake WFS (capabilities, describe,
+paged GetFeature), a municipality lattice, a population grid and fake Fingrid 267 / 248 / 362 rows.
+
+## Solar sources (branch `feature/solar-pv-simulator`)
+
+| Source | Used for | Access | Licence / attribution | Status |
+|---|---|---|---|---|
+| CM SAF SARAH-3 ICDR (SIS, SID), DOI 10.5676/EUM_SAF_CM/SARAH/V003 | hourly surface irradiance, satellite coverage | local files from a CM SAF Web User Interface order (`data/interim/smoke/ORD73128` SIS, `ORD73129` SID - the folder name `smoke` is misleading, these are REAL files); never copied or modified | CM SAF / EUMETSAT, text in the NetCDF `license` attribute (copied into `manifest.licences`); cite Pfeifroth et al. (2023) | **real data present and processed** (July 2025) |
+| ERA5 radiation + 2 m temperature (`ssrd ssr fdir tisr t2m`) | ERA5-only and hybrid PV input | `cdsapi` (`ingest-era5-solar`) or `--era5-solar-path` | Copernicus licence | assumed - **blocked, no credentials** |
+| Suomen Uusiutuvat ry plant list (XLSX, status 30.6.2025) `https://suomenuusiutuvat.fi/media/julkinen-aurinkovoima_vuositilastot_6_2025.xlsx` | 30 operational plants >= 1 MWp, municipality, MWp | public, `ingest-solar-public` | **no licence statement in the workbook**; cite Suomen Uusiutuvat ry (2025) | fetched and verified (30 plants, 250.66 MW) |
+| Statistics Finland WFS `https://geo.stat.fi/geoserver/wfs`, layer `vaestoruutu:vaki2025_1km` | inhabitants per 1 km cell (EPSG:3067) | public, paged GetFeature (`xkoord`, `ykoord` = SW corner, `vaesto`) | CC BY 4.0 per the solar report; **not stated by the service** (capabilities carry no Fees/AccessConstraints, the layer metadata URL returned HTTP 404 on 2026-11-27) | fetched (96,904 cells, 5,573,552 inhabitants) |
+| Statistics Finland WFS, layer `tilastointialueet:kunta1000k_2025` | municipality centroids (fields `kunta`, `nimi`, `namn`, `name`) | public | as above | fetched (308 municipalities) |
+| Fingrid 267 / 248 / 362 | capacity C(t), forecast, small-scale surplus | `FINGRID_API_KEY` | CC BY 4.0, dataset pages checked by the lead on 2026-11-27 | **blocked, no key** |
+
+TLS note: `requests` ships its own CA list (certifi), which does not trust the certificate chain seen on this machine. The
+public fetch therefore verifies against the operating-system trust store (`ssl.create_default_context()`, full verification
+on); an explicit `REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE` is respected instead. Verification is never disabled.
+
+Fingrid 362 caveats: one row per production type per hour, solar = `additionalJson.ProductionType == "AV06"` (filtered on the
+type, never on the value); unit kWh per hour; surplus after own consumption only; the latest data lag about 4 days and may be
+partly estimated. 248 is a forecast, 267 includes manual estimates. None of them is measured total generation.

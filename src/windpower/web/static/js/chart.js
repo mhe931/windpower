@@ -29,8 +29,10 @@ export function drawChart(svg, o) {
   clear(svg);
   const W = Math.max(280, Math.round(svg.getBoundingClientRect().width || svg.parentElement.clientWidth || 600));
   const H = Math.round(Math.min(380, Math.max(220, W * 0.45)));
-  const marginLabels = !o.y2 && W >= 560; // direct labels beside the line ends when there is room
-  const m = { l: 54, r: o.y2 ? 58 : marginLabels ? 92 : 14, t: 14, b: 40 };
+  // direct labels beside the line ends when the plot stays wide enough; the margin is sized to the longest label so nothing is clipped
+  const widest = Math.max(0, ...o.series.map((x) => Math.ceil(String(x.label ?? "").length * 7.8) + 12));
+  const marginLabels = !o.y2 && W - 54 - widest >= 320;
+  const m = { l: 54, r: o.y2 ? 58 : marginLabels ? widest : 14, t: 14, b: 40 };
   const pw = W - m.l - m.r;
   const ph = H - m.t - m.b;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -39,20 +41,27 @@ export function drawChart(svg, o) {
   const t1 = n > 1 ? o.times[n - 1] : t0 + HOUR;
   const all = o.series.flatMap((x) => x.values).filter((v) => v !== null && v !== undefined);
   const yMax = niceCeil(Math.max(...all, 0) * 1.05);
+  const rawMin = Math.min(...all, 0);                     // forecasts can be slightly negative at night: keep them visible
+  const step = niceStep(yMax - rawMin, Math.max(2, Math.floor(ph / 45)));
+  const yMin = rawMin < 0 ? Math.floor(rawMin / step) * step : 0;
   const x = (t) => m.l + ((t - t0) / (t1 - t0)) * pw;
-  const y = (v) => m.t + ph - (v / yMax) * ph;
+  const y = (v) => m.t + ph - ((v - yMin) / (yMax - yMin)) * ph;
   const g = s("g");
   svg.append(g);
 
-  // missing-data bands
+  // missing-data / fallback bands (hatched when o.gapHatch, so they never rely on colour alone)
+  if (o.gapHatch && (o.gaps ?? []).length) {
+    const pid = `hatch-${svg.id}`;
+    svg.append(s("defs", {}, s("pattern", { id: pid, width: 7, height: 7, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" },
+      s("rect", { width: 7, height: 7, class: "hatch-bg" }), s("line", { x1: 0, y1: 0, x2: 0, y2: 7, class: "hatch-line" }))));
+  }
   for (const [a, b] of o.gaps ?? []) {
     const xa = x(o.times[a] - HOUR / 2);
     const xb = x(o.times[b] + HOUR / 2);
-    g.append(s("rect", { class: "gap-mark", x: Math.max(m.l, xa), y: m.t, width: Math.max(2, Math.min(m.l + pw, xb) - Math.max(m.l, xa)), height: ph }));
+    g.append(s("rect", { class: o.gapClass ?? "gap-mark", fill: o.gapHatch ? `url(#hatch-${svg.id})` : null, x: Math.max(m.l, xa), y: m.t, width: Math.max(2, Math.min(m.l + pw, xb) - Math.max(m.l, xa)), height: ph }));
   }
   // y grid + ticks
-  const step = niceStep(yMax, Math.max(2, Math.floor(ph / 45)));
-  for (let v = 0; v <= yMax + 1e-9; v += step) {
+  for (let v = yMin; v <= yMax + 1e-9; v += step) {
     g.append(s("line", { class: "gridline", x1: m.l, x2: m.l + pw, y1: y(v), y2: y(v) }));
     g.append(s("text", { class: "tick-label", x: m.l - 6, y: y(v) + 4, "text-anchor": "end" }, fmtNum(v, step < 1 ? 1 : 0)));
   }

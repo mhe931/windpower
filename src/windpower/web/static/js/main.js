@@ -3,65 +3,19 @@ import { $, h, clear } from "./dom.js";
 import { fmtDateTime, fmtDate, fmtNum, isoDay, parseUtc } from "./format.js";
 import { drawChart, legendItem } from "./chart.js";
 import { createMap } from "./map.js";
+import { day, stat, setFieldError, clearFieldError, showFormError, hideFormError, redraws, watchOnce, bindTable } from "./ui.js";
+import { initSolar, showSolarView, solarBanner } from "./solar.js";
 
 const API = "/api/v1";
 const PARAM_INPUT = { lat: "lat", lon: "lon", start: "start", end: "end", archetype: "archetype", capacity_mw: "capacity" };
-const state = { meta: null, archetypes: new Map(), map: null, sim: null, ov: null, ovLoaded: false, redraws: new Map(), simToken: 0, ovToken: 0 };
-
-// ---------------------------------------------------------------- helpers
-const day = (iso) => iso.slice(0, 10);
-const stat = (label, value, unit = "") => h("div", {}, h("dt", {}, label), h("dd", {}, value, unit ? h("small", {}, ` ${unit}`) : null));
-
-function setFieldError(input, message) {
-  const err = $(`err-${input.name || input.id}`) ?? $(input.dataset.error);
-  input.setAttribute("aria-invalid", "true");
-  if (!err) return;
-  err.textContent = message;
-  err.hidden = false;
-  const ids = new Set((input.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
-  ids.add(err.id);
-  input.setAttribute("aria-describedby", [...ids].join(" "));
-}
-
-function clearFieldError(input) {
-  const err = $(`err-${input.name || input.id}`) ?? $(input.dataset.error);
-  input.setAttribute("aria-invalid", "false");
-  if (!err) return;
-  err.hidden = true;
-  err.textContent = "";
-  const ids = (input.getAttribute("aria-describedby") || "").split(/\s+/).filter((x) => x && x !== err.id);
-  if (ids.length) input.setAttribute("aria-describedby", ids.join(" "));
-  else input.removeAttribute("aria-describedby");
-}
-
-function showFormError(boxId, textId, message) {
-  $(textId).textContent = message;
-  const box = $(boxId);
-  box.hidden = false;
-  box.focus();
-}
-
-function hideFormError(boxId) {
-  $(boxId).hidden = true;
-}
-
-function watchResize(svg, redraw) {
-  state.redraws.set(svg.id, redraw);
-  let width = 0;
-  new ResizeObserver(() => {
-    const w = Math.round(svg.getBoundingClientRect().width);
-    if (w === width || w === 0) return;
-    width = w;
-    requestAnimationFrame(() => state.redraws.get(svg.id)?.());
-  }).observe(svg);
-}
+const state = { meta: null, solar: { meta: null }, windError: null, archetypes: new Map(), map: null, sim: null, ov: null, ovLoaded: false, redraws, simToken: 0, ovToken: 0 };
 
 // ---------------------------------------------------------------- page chrome
 function applyMeta(meta) {
   const banner = $("data-banner");
   $("banner-text").textContent = meta.notice;
   banner.classList.toggle("real", !meta.synthetic);
-  document.title = `${meta.demo ? "[DEMO] " : meta.synthetic ? "[SYNTHETIC] " : ""}Finland wind simulator`;
+  document.title = `${meta.demo ? "[DEMO] " : meta.synthetic ? "[SYNTHETIC] " : ""}Finland wind and solar simulator`;
   $("footer-label").textContent = `${meta.label}. ${meta.statements.real_data}`;
   $("footer-attribution").textContent = meta.attribution ?? "";
   $("footer-model").textContent = meta.model_version;
@@ -237,29 +191,7 @@ function renderSimulation(res) {
   $("sim-status").textContent = `Simulation complete: ${fmtNum(sm.total_mwh, 1)} MWh over ${fmtNum(sm.hours, 0)} hours, mean capacity factor ${fmtNum(sm.mean_capacity_factor * 100, 1)} percent.`;
 }
 
-const watched = new Set();
-function watchOnce(svg, redraw) {
-  state.redraws.set(svg.id, redraw);
-  if (watched.has(svg.id)) return;
-  watched.add(svg.id);
-  watchResize(svg, redraw);
-}
-
-const tableBound = new Map();
-function bindTable(details, tbody, rows) {
-  tableBound.set(details.id, { rows, done: false });
-  if (details.dataset.bound) return;
-  details.dataset.bound = "1";
-  details.addEventListener("toggle", () => {
-    const b = tableBound.get(details.id);
-    if (!details.open || b.done) return;
-    b.done = true;
-    const frag = document.createDocumentFragment();
-    for (const r of b.rows()) frag.append(h("tr", {}, ...r.map((c, k) => (k === 0 ? h("th", { scope: "row" }, c) : h("td", {}, c)))));
-    details.querySelector("tbody").replaceChildren(frag);
-  });
-}
-
+  
 // ---------------------------------------------------------------- view 2: national overview
 function initOverview(meta) {
   const [s0, s1] = [day(meta.time_range.first_utc), day(meta.time_range.last_utc)];
@@ -375,15 +307,52 @@ function renderOverview(res) {
 }
 
 // ---------------------------------------------------------------- routing and start-up
+const WIND_VIEWS = ["simulate", "overview"];
+const SOLAR_VIEWS = ["solar-simulate", "solar-overview"];
+
+function currentRoute() {
+  const hash = location.hash.slice(1);
+  if ([...WIND_VIEWS, ...SOLAR_VIEWS].includes(hash)) return hash;
+  return state.meta || !state.solar.meta ? "simulate" : "solar-simulate"; // a solar-only server opens on Solar
+}
+
+function setBanner(text, real) {
+  $("banner-text").textContent = text;
+  $("data-banner").classList.toggle("real", real);
+}
+
 function showView() {
-  const name = location.hash === "#overview" ? "overview" : "simulate";
-  for (const v of ["simulate", "overview"]) {
-    $(`view-${v}`).hidden = v !== name;
-    const link = $(`nav-${v}`);
-    if (v === name) link.setAttribute("aria-current", "page");
+  const route = currentRoute();
+  const isSolar = route.startsWith("solar-");
+  for (const v of [...WIND_VIEWS, ...SOLAR_VIEWS]) {
+    const ok = isSolar ? state.solar.meta : state.meta;
+    $(`view-${v}`).hidden = v !== route || !ok;
+    const link = document.getElementById(`nav-${v}`);
+    if (v === route) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
-  if (name === "overview" && state.meta && !state.ovLoaded) {
+  $("tabs-wind").hidden = isSolar;
+  $("tabs-solar").hidden = !isSolar;
+  for (const [id, on] of [["nav-wind", !isSolar], ["nav-solar", isSolar]]) {
+    if (on) $(id).setAttribute("aria-current", "true");
+    else $(id).removeAttribute("aria-current");
+  }
+  $("wind-missing").hidden = isSolar || !!state.meta;
+  $("solar-missing").hidden = !isSolar || !!state.solar.meta;
+  if (isSolar) {
+    const b = solarBanner();
+    setBanner(b.text, b.real);
+    document.title = `${b.tag}Finland solar simulator`;
+    if (state.solar.meta) showSolarView(route);
+    return;
+  }
+  if (!state.meta) {
+    setBanner(state.windError ?? "The wind artifact has not been built.", true);
+    return;
+  }
+  applyMeta(state.meta);
+  $("footer-solar").hidden = true;
+  if (route === "overview" && !state.ovLoaded) {
     state.ovLoaded = true;
     loadOverview({});
   } else {
@@ -392,18 +361,24 @@ function showView() {
 }
 
 async function main() {
-  try {
-    const [meta, archetypes] = await Promise.all([getJson(`${API}/meta`), getJson(`${API}/archetypes`)]);
+  state.solar = { meta: null };
+  const [wind, solar] = await Promise.allSettled([Promise.all([getJson(`${API}/meta`), getJson(`${API}/archetypes`)]), initSolar(state.solar)]);
+  if (wind.status === "fulfilled") {
+    const [meta, archetypes] = wind.value;
     state.meta = meta;
     applyMeta(meta);
     initDateInputs(meta);
     initSimulation(meta, archetypes);
     initOverview(meta);
-    window.addEventListener("hashchange", showView);
-    showView();
-  } catch (err) {
-    $("banner-text").textContent = err instanceof ApiError ? err.message : "The page could not start.";
+  } else {
+    const err = wind.reason;
+    state.windError = err instanceof ApiError ? err.message : "The wind data could not be loaded.";
+    $("wind-missing-text").textContent = state.windError;
   }
+  if (solar.status === "rejected") $("solar-missing-text").textContent = "The solar data could not be loaded.";
+  else if (!state.solar.meta) $("solar-missing-text").textContent = state.solar.error ?? "The solar artifact has not been built.";
+  window.addEventListener("hashchange", showView);
+  showView();
 }
 
 main();
